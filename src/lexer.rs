@@ -7,7 +7,7 @@ pub enum Operator {
     Add, Sub, Mul, Div, Mod,                                        // +, -, *, /, %
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,          // +=, -=, *=, /=, %=
     BWAnd, BWOr, BWXor, BWNot, BWShiftL, BWShiftR,                  // &, |, ^, ~, <<, >>
-    AndAssign, OrAssign, XorAssign, ShiftLAssign, ShiftRAssign,     // &=, |=, ^=, ~=, <<=, >>=
+    AndAssign, OrAssign, XorAssign, ShiftLAssign, ShiftRAssign,     // &=, |=, ^=, <<=, >>=
     Inc, Dec, Len,                                                  // ++, --, len
     Equal, NEqual, LT, GT, LTE, GTE,                                // ==, !=, <, >, <=, >=
     Not, And, Or,                                                   // !, &&, ||
@@ -328,7 +328,6 @@ impl Lexer {
                             Some(other) => return Err(ParseError::InvalidToken { span, token: format!("{}i{}", digits, other) }),
                             None => return Err(ParseError::EOF(format!("Number suffix")))
                         }
-
                     }
                     Some('u') => {
                         chars.next();
@@ -350,7 +349,7 @@ impl Lexer {
                             None => return Err(ParseError::EOF(format!("Number suffix")))
                         }
                     }
-                    _ => NumKind::Float64
+                    _ => NumKind::Any
                 };
 
                 // Parse based on radix
@@ -411,7 +410,6 @@ impl Lexer {
                     "static" => TokenKind::Keyword(Keyword::Static),
                     "attach" => TokenKind::Keyword(Keyword::Attach),
                     "detach" => TokenKind::Keyword(Keyword::Detach),
-                    //"func" => TokenKind::Keyword(Keyword::Func),
                     "self" => TokenKind::Keyword(Keyword::PSelf),
                     "seal" => TokenKind::Keyword(Keyword::Seal),
                     "locked" => TokenKind::Keyword(Keyword::Locked),

@@ -185,3 +185,19 @@ for i in 1 ..< 1
     print i
 
 print (1 ... 10).ToArray()
+
+print 5 + 6 * 2
+print 6 * 2 + 5
+print 6 * (2 + 5)
+print -6 * 2
+print -(6 * -2)
+
+let ded = [1,2,3]
+print ded[2]
+
+let deed = "ABCDEFGHIJK"
+print deed[2]
+
+for char in deed {
+    print char
+}

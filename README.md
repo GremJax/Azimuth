@@ -458,3 +458,39 @@ Objects can be tested for shape compatability using the "=~" is shape and "!~" i
     x := Vector2
     print x =~ Vector2
     // prints "true"
+
+### Reflection
+
+Reflection has not been added to the language yet, but if it was, here is how it would be implemented. Remind me to add it when a genuine use is found, otherwise its just complications for no reason.
+
+Reflection is accomplished using the "@" operator. There can be reflected instances of objects, shapes, and azimuths to provide information and mutate at the runtime object level. Such patterns can be used to attach shapes and azimuths to other shapes and azimuths directly, either on a single object or the static singleton of each class.
+
+    @foo         // Reflected object
+    foo.@Name    // Reflected Azimuth state
+    Named::@Name // Reflected Azimuth (stateless)
+    @Named       // Reflected Shape
+
+    foo.@Name := Benchmarking {
+        Start -> before Get
+        Stop -> after Get
+    }
+
+Reflected types can be used with @Shape, @Azimuth, and @Object. These let you store reflected values and use them as parameters.
+
+    PrintCompilerName(@Object obj)
+        print obj.Slots
+
+    GetReturnType(@Azimuth az) -> @Shape
+        return az.ReturnType
+
+    let typeStorage.Stored = @Identified
+    
+The "$" operator can turn reflected types and instances back into their object, shape, and azimuth counterparts. They can be stored as info and converted back through runtime lookups. Why you would ever want to do such a thing instead of just using generics and shape comparisons is beyond me, but its possible.
+
+    CompareType(@Shape shape, Object object) -> bool
+        return object =~ $shape
+
+    ExecuteIfPresent(Action @Azimuth az, Object object) {
+        if @object.Mappings.Contains(az.Id)
+            object.$az()
+    }

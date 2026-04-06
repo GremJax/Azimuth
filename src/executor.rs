@@ -293,6 +293,13 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                         None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, array.len() - 1)}),
                     }
                 }
+                (Value::String(string), Value::Number(index)) => {
+                    match string.as_bytes().get(index.to_i32() as usize) {
+                        Some(value) => Ok(Value::String(format!("{}",*value as char))),
+                        None if optional => Ok(Value::None),
+                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, string.len() - 1)}),
+                    }
+                }
                 (Value::Range(start, end, by, inclusive, _), Value::Number(index)) => {
                     let start = start.to_i32();
                     let end = end.to_i32();
@@ -778,6 +785,25 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::For{ span, local, target, statement } => {
             
             match evaluate(runtime, target)? {
+                
+                // String
+                Value::String(string) => {
+                    for char in string.as_bytes() {
+                        let item = Value::String(format!("{}",*char as char));
+
+                        runtime.reserve_local(local, item);
+
+                        match execute_statement(runtime, *statement.clone())? {
+                            ExecFlow::Continue(_) => continue,
+                            ExecFlow::Break(_) => break,
+                            ExecFlow::Normal(_) => {},
+                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
+                            flow => return Ok(flow)
+                        }
+
+                        runtime.deref_local(local, 1);
+                    }
+                },
 
                 // Array
                 Value::Array(vec, _) => {
@@ -856,11 +882,6 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                 other => Err(RuntimeError::TypeMismatch{span, found: other, expected: ValueKind::String})
             }
         }
-
-        // Adorable ignores
-        //ResolvedStatement::Break => {}
-        //ResolvedStatement::Continue => {}
-        //ResolvedStatement::Return(_) => {}
 
         other => return Err(RuntimeError::Error{span:Span::default(), message:format!("Invalid statement: {:?}", other)})
     }

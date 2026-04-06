@@ -176,6 +176,20 @@ shape Range {
     intrinsic CreateExclusive(int start, int end, int by) -> range
 }
 
+shape Set<T> {
+
+}
+
+shape Dict<K, V> {
+
+}
+
+shape Collection<T> {
+    abstract Len() -> uint64
+    abstract Contains(T item) -> bool
+    abstract ToArray() -> []
+}
+
 shape Comparable<T> {
     abstract Compare(T other) -> int32
 }
@@ -246,6 +260,29 @@ shape Bool {
 }
 
 shape String {
+    Len() -> uint64 return len self
+
+/*
+    StartsWith(string substring) -> bool {
+        if self.Len() < substring.Len() return false
+
+        for i in 0 ... substring.Len() 
+            if self[i] != substring[i] return false
+
+        return true
+    }
+    EndsWith(string substring) -> bool {
+        if self.Len() < substring.Len() return false
+
+        for i in 0 ... substring.Len() {
+            let index = self.Len() - i - 1
+            if self[index] != substring[index] return false
+        }
+            
+        return true
+    }
+*/
+
     intrinsic Upper() -> string
     intrinsic Lower() -> string
     intrinsic Trim() -> string

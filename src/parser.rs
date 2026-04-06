@@ -118,6 +118,7 @@ pub enum Expression {
         func: Box<Option<FunctionBody>>,
         captures: Vec<Identifier>,
     },
+    Reflection(Span, Box<Expression>)
 }
 
 #[derive(Debug, Clone)]
@@ -275,22 +276,58 @@ pub enum Statement {
 
 type PeekableTokens = std::iter::Peekable<std::vec::IntoIter<Token>>;
 
-fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseError> {
+fn infix_bp(op: &Operator) -> (u8, u8) {
+    match op {
+        Operator::Or                            => (3, 4),
+        Operator::And                           => (5, 6),
+
+        Operator::BWOr                          => (7, 8),
+        Operator::BWXor                         => (9, 10),
+        Operator::BWAnd                         => (11, 12),
+
+        Operator::Equal | Operator::NEqual      => (13, 14),
+        Operator::LT | Operator::GT |
+        Operator::LTE | Operator::GTE           => (15, 16),
+
+        Operator::BWShiftL | Operator::BWShiftR => (17, 18),
+
+        Operator::Add | Operator::Sub           => (19, 20),
+        Operator::Mul | Operator::Div |
+        Operator::Mod                           => (21, 22),
+
+        Operator::Range                         => (1, 2), 
+        Operator::RangeLT                       => (1, 2), 
+
+        Operator::IsShape                       => (1, 2), 
+        Operator::NIsShape                      => (1, 2), 
+        Operator::DQuestion                     => (1, 2), 
+
+        _                                       => (0, 0),
+    }
+}
+
+fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expression, ParseError> {
     let token = tokens.next().unwrap();
     let span = token.span.clone();
 
     let mut expr = match token.kind {
         // Unary preceding operator
         TokenKind::Operator(operator) if UNARY_OPERATORS.contains(&operator) => {
-            let expr = parse_expression(tokens)?;
+            let expr = parse_expression(tokens, 25)?;
             Expression::UnaryOp{span, operator, operand: Box::new(expr)}
-        } 
+        }
+        
+        // Reflection
+        TokenKind::Operator(Operator::At) => {
+            let expr = parse_expression(tokens, 0)?;
+            Expression::Reflection(span, Box::new(expr))
+        }
 
         TokenKind::Number(num) => Expression::Value(span, (num as i32).into()),
         TokenKind::Bool(b) => Expression::Value(span, b.into()),
         TokenKind::String(s) => Expression::Value(span, s.into()),
         TokenKind::NoneValue => Expression::Value(span, Value::None),
-        
+
         // Lambda
         TokenKind::Operator(Operator::BWOr) => parse_lambda(span, tokens)?,
 
@@ -311,7 +348,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
                         tokens.next();
                         expressions.push(Expression::Value(span, (s.clone()).into()));
                     }
-                    _ => expressions.push(parse_expression(tokens)?),
+                    _ => expressions.push(parse_expression(tokens, 0)?),
                 }
             }
 
@@ -322,7 +359,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
         TokenKind::Keyword(Keyword::PSelf) => Expression::Variable(span, format!("self")),
 
         TokenKind::LeftParen => {
-            let expr = parse_expression(tokens)?;
+            let expr = parse_expression(tokens, 0)?;
             tokens.next(); // Consume right parenthesis
             expr
         }
@@ -337,7 +374,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
                     break;
                 }
 
-                elements.push(parse_expression(tokens)?);
+                elements.push(parse_expression(tokens, 0)?);
 
                 if let Some(token) = tokens.peek()
                     && matches!(token.kind, TokenKind::Comma) {
@@ -380,7 +417,8 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
                 // Expect dot or colon next
                 match &tokens.peek().unwrap().kind {
                     TokenKind::Operator(Operator::Dot) | TokenKind::Operator(Operator::QDot) |
-                    TokenKind::Operator(Operator::DColon) | TokenKind::Operator(Operator::QDColon) => {} // Continue
+                    TokenKind::Operator(Operator::DColon) | TokenKind::Operator(Operator::QDColon) | 
+                    TokenKind::Operator(Operator::GT) => {} // Continue
                     other => return Err(ParseError::IncorrectToken { span:token.span, token:other.clone(), expected: format!("Access or next namespace"), loc: format!("member access") })
                 }
             }
@@ -416,7 +454,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
                             tokens.next();
                         }
                         _ => {
-                            args.push(parse_expression(tokens)?);
+                            args.push(parse_expression(tokens, 0)?);
                         }
                     }
                 }
@@ -426,7 +464,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
             
             TokenKind::LeftBracket => {
                 tokens.next(); // Consume bracket
-                let index = parse_expression(tokens)?;
+                let index = parse_expression(tokens, 0)?;
                 tokens.next(); // Consume bracket
                 expr = Expression::ArrayAccess{span, target:Box::new(expr), index:Box::new(index), optional:false, chained};
             }
@@ -436,19 +474,23 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
     }
 
     // Check for operators
-    if let Some(token) = tokens.peek() {
+    loop {
+        let Some(token) = tokens.peek() else { break };
         let span = token.span.clone();
-        if matches!(&token.kind, TokenKind::Operator(op) 
-            if lexer::BINARY_OPERATORS.contains(&op))
-        {
-            if let TokenKind::Operator(op) = tokens.next().unwrap().kind {
-                return Ok(Expression::BinaryOp {span, 
-                    left: Box::new(expr),
-                    operator: op,
-                    right: Box::new(parse_expression(tokens)?),
-                })
-            }
+
+        let op = match &token.kind {
+            TokenKind::Operator(op) if lexer::BINARY_OPERATORS.contains(op) => op.clone(),
+            _ => break,
+        };
+
+        let (left_bp, right_bp) = infix_bp(&op);
+        if left_bp <= min_bp {
+            break; // This op belongs to our caller, not us
         }
+
+        tokens.next(); // consume the operator
+        let right = parse_expression(tokens, right_bp)?;
+        expr = Expression::BinaryOp { span, left: Box::new(expr), operator: op, right: Box::new(right) };
     }
 
     // Check for ternary
@@ -458,7 +500,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
         {
             tokens.next(); // consume question mark
             
-            let true_expr = parse_expression(tokens)?;
+            let true_expr = parse_expression(tokens, 0)?;
 
             // Expect colon
             let token = tokens.peek().unwrap();
@@ -468,7 +510,7 @@ fn parse_expression(tokens: &mut PeekableTokens) -> Result<Expression, ParseErro
             }
             tokens.next(); // Consume colon
             
-            let else_expr = parse_expression(tokens)?;
+            let else_expr = parse_expression(tokens, 0)?;
 
             expr = Expression::Ternary{ span, condition:Box::new(expr), true_expr:Box::new(true_expr), else_expr:Box::new(else_expr)}
         }
@@ -712,7 +754,7 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
 
 fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Statement, ParseError> {
     // Build member call
-    let object = parse_expression(tokens)?;
+    let object = parse_expression(tokens, 0)?;
     
     let token = tokens.peek().unwrap();
     match &token.kind {
@@ -761,7 +803,7 @@ fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Stat
 
                                 },
                                 TokenKind::Operator(Operator::Assign) => {
-                                    let value = parse_expression(tokens)?;
+                                    let value = parse_expression(tokens, 0)?;
                                     values.insert(from_slot, value);
                                 },
                                 other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("->"), loc:format!("shape attachment remap value") }),
@@ -791,57 +833,57 @@ fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Stat
         // Assign
         TokenKind::Operator(Operator::Assign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::Assign{ span, target: object, value })
         }
         TokenKind::Operator(Operator::AddAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::Add })
         }
         TokenKind::Operator(Operator::SubAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::Sub })
         }
         TokenKind::Operator(Operator::MulAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::Mul })
         }
         TokenKind::Operator(Operator::DivAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::Div })
         }
         TokenKind::Operator(Operator::ModAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::Mod })
         }
         TokenKind::Operator(Operator::AndAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::BWAnd })
         }
         TokenKind::Operator(Operator::OrAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::BWOr })
         }
         TokenKind::Operator(Operator::XorAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::BWXor })
         }
         TokenKind::Operator(Operator::ShiftLAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::BWShiftL })
         }
         TokenKind::Operator(Operator::ShiftRAssign) => {
             tokens.next(); // consume operator
-            let value = parse_expression(tokens)?;
+            let value = parse_expression(tokens, 0)?;
             Ok(Statement::AssignAugmented{ span, target: object, value, operator:Operator::BWShiftR })
         }
         //TokenKind::Operator(Operator::Inc) => {
@@ -967,7 +1009,7 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
     let set_value = match tokens.peek().unwrap().kind {
         TokenKind::Operator(Operator::Assign) => {
             tokens.next();
-            Some(parse_expression(tokens)?)
+            Some(parse_expression(tokens, 0)?)
         }
         _ => None
     };
@@ -1190,7 +1232,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                 TokenKind::Operator(Operator::Assign) => {
                     // Local with assignment
                     tokens.next();
-                    let value = parse_expression(tokens)?;
+                    let value = parse_expression(tokens, 0)?;
                     Ok(Statement::DeclareLocal {span, name: object_identifier, value })
                 }
                 _ => {
@@ -1203,13 +1245,13 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         // seal
         TokenKind::Keyword(Keyword::Seal) => {
             tokens.next(); // consume 'seal' keyword
-            Ok(Statement::Seal{span, target: parse_expression(tokens)?})
+            Ok(Statement::Seal{span, target: parse_expression(tokens, 0)?})
         },
 
         // print
         TokenKind::Keyword(Keyword::Print) => {
             tokens.next(); // consume 'print' keyword
-            Ok(Statement::Print{span, expr: parse_expression(tokens)?})
+            Ok(Statement::Print{span, expr: parse_expression(tokens, 0)?})
         },
 
         // Object Identifier
@@ -1243,7 +1285,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         TokenKind::Keyword(Keyword::If) => {
             tokens.next(); // Consume if
 
-            let condition = parse_expression(tokens)?;
+            let condition = parse_expression(tokens, 0)?;
             let true_statement = parse_statement(tokens)?;
 
             let else_token = tokens.peek().unwrap();
@@ -1262,7 +1304,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         TokenKind::Keyword(Keyword::Switch) => {
             tokens.next(); // Consume keyword
 
-            let target = parse_expression(tokens)?;
+            let target = parse_expression(tokens, 0)?;
 
             // Expect brace
             let token = tokens.next().unwrap();
@@ -1303,7 +1345,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                         break
                     }
                     _ => {
-                        let branch_expr = parse_expression(tokens)?;
+                        let branch_expr = parse_expression(tokens, 0)?;
 
                         // Expect Arrow
                         let token = tokens.next().unwrap();
@@ -1326,7 +1368,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         TokenKind::Keyword(Keyword::While) => {
             tokens.next(); // Consume while
 
-            let condition = parse_expression(tokens)?;
+            let condition = parse_expression(tokens, 0)?;
             let statement = parse_statement(tokens)?;
 
             Ok(Statement::While{span, condition, statement: Box::new(statement) })
@@ -1356,14 +1398,14 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
             match tokens.next().unwrap().kind {
 
                 TokenKind::Keyword(Keyword::In) => {
-                    let target = parse_expression(tokens)?;
+                    let target = parse_expression(tokens, 0)?;
                     let statement = parse_statement(tokens)?;
                     Ok(Statement::For{span, local, target, statement:Box::new(statement) })
                 }
 
                 TokenKind::Operator(Operator::Assign) => {
-                    let start = parse_expression(tokens)?; 
-                    let cond = parse_expression(tokens)?;
+                    let start = parse_expression(tokens, 0)?; 
+                    let cond = parse_expression(tokens, 0)?;
                     let statement = parse_statement(tokens)?;
                     let inc = parse_statement(tokens)?;
                     Ok(Statement::ForInc{span, local, start, cond, inc:Box::new(inc), statement:Box::new(statement) })
@@ -1402,11 +1444,11 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         }
         TokenKind::Keyword(Keyword::Return) => {
             tokens.next();
-            Ok(Statement::Return{span, value:parse_expression(tokens)?})
+            Ok(Statement::Return{span, value:parse_expression(tokens, 0)?})
         }
         TokenKind::Keyword(Keyword::Throw) => {
             tokens.next();
-            Ok(Statement::Throw{span, message:parse_expression(tokens)?})
+            Ok(Statement::Throw{span, message:parse_expression(tokens, 0)?})
         }
 
         token => Err(ParseError::UnexpectedToken { span, token:token.clone(), loc:format!("statements") }),

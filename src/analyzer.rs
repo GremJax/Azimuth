@@ -427,7 +427,8 @@ pub enum ResolvedExpression {
         output_type: ResolvedShapeExpression,
         func: Box<Option<ResolvedFunctionBody>>,
         captures: Vec<LocalId>,
-    }
+    },
+    Reflection(Span, Box<ResolvedExpression>),
 }
 
 impl ResolvedExpression {
@@ -467,9 +468,11 @@ impl ResolvedExpression {
             ResolvedExpression::BinaryOp { operator, left, .. } => operator.kind(left.kind()),
             ResolvedExpression::Ternary { true_expr, .. } => true_expr.kind(),
             ResolvedExpression::MemberAccess { member, .. } => member.value_type.clone(),
-            ResolvedExpression::ArrayAccess { target, .. } => match target.kind() {
+            ResolvedExpression::ArrayAccess { target, span, .. } => match target.kind() {
                 ValueKind::Array(value_type) => *value_type.clone(),
-                _ => unreachable!()
+                ValueKind::Range(num_kind) => ValueKind::Number(num_kind),
+                ValueKind::String => ValueKind::String,
+                other => panic!("{:?}: Iterable caled on {:?}", span, other)
             }
             ResolvedExpression::FunctionCall { target, .. } => match target.kind() {
                 ValueKind::Function(info) => info.output_type.clone(),
@@ -479,6 +482,11 @@ impl ResolvedExpression {
                 let resolved_out = output_type.kind();
                 let resolved_in = input_types.iter().map(|i| i.shape.kind()).collect();
                 ValueKind::Function(Box::new(FunctionSignature{ input_types:resolved_in, output_type:resolved_out, has_self:*has_self }))
+            }
+            ResolvedExpression::Reflection(_, expr) => match *expr.clone() {
+                ResolvedExpression::MemberAccess { member, .. } => ValueKind::Azimuth(Box::new(member.value_type)),
+                ResolvedExpression::Variable(_, symbol) => todo!(),
+                _ => todo!()
             }
         }
     }
@@ -498,6 +506,7 @@ impl ResolvedExpression {
             ResolvedExpression::ArrayAccess { span, .. } => span,
             ResolvedExpression::FunctionCall { span, .. } => span,
             ResolvedExpression::Function { span, .. } => span,
+            ResolvedExpression::Reflection(span, _) => span,
         }
     }
 }
@@ -1190,6 +1199,18 @@ impl Analyzer {
                 })
             }
 
+            Expression::Reflection(span, expr) => {
+                let resolved = self.resolve_expression(*expr, scope)?;
+                match resolved {
+                    ResolvedExpression::MemberAccess { span, target, member, optional, chained } => {
+                        
+                    }
+                    _ => todo!()
+                }
+                
+                todo!()
+            }
+
         }
     }
 
@@ -1428,6 +1449,7 @@ impl Analyzer {
                 let iterable_type = match target.kind() {
                     ValueKind::Array(kind) => ShapeExpression::Primitive(span.clone(), *kind),
                     ValueKind::Range(kind) => ShapeExpression::Primitive(span.clone(), ValueKind::Number(kind)),
+                    ValueKind::String => ShapeExpression::Primitive(span.clone(), ValueKind::String),
                     other => return Err(CompileError::Error{span, message:format!("Expected array or range in for loop declaration, got {:?}",other)}),
                 };
 

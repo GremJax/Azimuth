@@ -133,6 +133,52 @@ fn benchmarking_get_time(input: IntrinsicParameters) -> Result<Value, RuntimeErr
     Ok(Value::Number(Number::UInt64(seconds)))
 }
 
+fn range_to_array(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let val = &input.args[0];
+    let (from, to, by, inclusive) = match val {
+        Value::Range(from, to, by, inclusive, _) => (from.to_i32(), to.to_i32(), by.to_i32(), *inclusive),
+        other => return Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Range(NumKind::Any) })
+    };
+
+    let values: Vec<Value> = if from <= to {
+        if inclusive {
+            (from..=to).step_by(by as usize).map(|i| i.into()).collect()
+        } else {
+            (from..to).step_by(by as usize).map(|i| i.into()).collect()
+        }
+    } else {
+        if inclusive {
+            (to..=from).rev().step_by(-by as usize).map(|i| i.into()).collect()
+        } else {
+            (to..from).rev().step_by(-by as usize).map(|i| i.into()).collect()
+        }
+    };
+
+    Ok(Value::Array(values, ValueKind::Number(NumKind::Int32)))
+}
+
+fn range_create_inclusive(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let start = &input.args[0];
+    let end = &input.args[1];
+    let by = &input.args[2];
+    match (start, end, by) {
+        (Value::Number(start), Value::Number(end), Value::Number(by)) => 
+            Ok(Value::Range(start.clone(), end.clone(), by.clone(), true, NumKind::Int32)),
+        (other, _,_) => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Number(NumKind::Any) })
+    }
+}
+
+fn range_create_exclusive(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let start = &input.args[0];
+    let end = &input.args[1];
+    let by = &input.args[2];
+    match (start, end, by) {
+        (Value::Number(start), Value::Number(end), Value::Number(by)) => 
+            Ok(Value::Range(start.clone(), end.clone(), by.clone(), false, NumKind::Int32)),
+        (other, _,_) => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Number(NumKind::Any) })
+    }
+}
+
 pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
     match name.as_str() {
         "Array::Append" => Ok(array_append),
@@ -147,6 +193,9 @@ pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
         "String::Lower" => Ok(string_lower),
         "String::Trim" => Ok(string_trim),
         "Benchmarking::GetTime" => Ok(benchmarking_get_time),
+        "Range::ToArray" => Ok(range_to_array),
+        "Range::Create" => Ok(range_create_inclusive),
+        "Range::CreateExclusive" => Ok(range_create_exclusive),
 
         other => Err(ParseError::Error{span, message:format!("No intrinsic operation defined for {}", other)})
     }

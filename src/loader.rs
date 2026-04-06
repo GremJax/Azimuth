@@ -73,15 +73,33 @@ impl Namespace {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct AtlasLocation {
-    pub url: String,
-    pub subspace: Option<Identifier>,
+pub enum AtlasLocation {
+    LocalFile{ path:String },
+    LocalDirectory{ path:String },
+    LocalSubspace{ path:String, subspace:NamespaceId },
+    DiskDepdencency{ path:String },
+    NetDependency{ url:String, version:String },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum ResolvedAtlasLocation {
+    File(String),
+    Dir(Vec<String>),
+    SubspaceFile(String, Identifier),
+}
+
+#[derive(Debug, Clone)]
+pub struct AtlasMappingFlags {
+    pub hidden: bool,
+    pub trailhead: bool,
+    pub lazy: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct AtlasMapping {
     pub from: Identifier,
-    pub to: AtlasLocation
+    pub to: AtlasLocation,
+    pub flags: AtlasMappingFlags,
 }
 
 pub struct Loader {
@@ -137,17 +155,22 @@ impl Loader {
         root.name = atlas.name.clone();
 
         for mapping in atlas.mappings {
-            let ast = match self.load_file(Span::new(0,0,atlas_path.to_string()), mapping.to.clone())? {
+            let ast = match self.load_atlas_location(Span::new(0,0,atlas_path.to_string()), mapping.to.clone())? {
                 Some(ast) => ast,
                 None => continue,
             };
+
+            let new_span = Span::new(0,0, match &mapping.to {
+                AtlasLocation::LocalFile { path } => path.clone(),
+                _ => todo!()
+            });
             
             self.files.insert(mapping.to.clone(), ast);
             let statements = self.files.get(&mapping.to).unwrap().clone();
 
             let name = format!("{}::{}", atlas.name, mapping.from);
             //println!("Creating namespace: {}", name);
-            let namespace = self.load_namespace(Span::new(0,0, mapping.to.url.clone()), name.clone(), statements)?;
+            let namespace = self.load_namespace(new_span, name.clone(), statements)?;
             let id = namespace.id;
             root_children.push(name.clone());
             self.load_order.push((mapping.to, name, id));
@@ -251,18 +274,43 @@ impl Loader {
         Ok(atlas)
     }
 
-    pub fn load_file(&self, span: Span, location: AtlasLocation) -> Result<Option<Vec<Statement>>, LoadError> {
-        if location.subspace.is_some() { todo!() }
-        if self.files.contains_key(&location) { return Ok(None) }
+    pub fn load_atlas_location(&self, span: Span, location: AtlasLocation) -> Result<Option<Vec<Statement>>, LoadError> {
+        match location {
+            AtlasLocation::DiskDepdencency{ path } => self.load_file(span, path),
+            AtlasLocation::LocalFile{ path } => self.load_file(span, format!("{}/{}", self.source_dir, path)),
+            _ => todo!()
+        }
+    }
 
-        let source = fs::read_to_string(format!("{}/{}", self.source_dir, location.url))
-            .map_err(|_| LoadError::FileNotFound{span, location:location.url.clone()})?;
+    pub fn resolve_atlas_location(&self, span: Span, location: AtlasLocation) -> Result<ResolvedAtlasLocation, LoadError> {
+        let resolved = match location {
+            AtlasLocation::LocalFile{ path } => ResolvedAtlasLocation::File(format!("{}/{}", self.source_dir, path)),
+            AtlasLocation::LocalSubspace{ path, subspace } => ResolvedAtlasLocation::SubspaceFile(format!("{}/{}", self.source_dir, path), subspace),
+            AtlasLocation::LocalDirectory{ path } => {
+                todo!()
+            },
+            AtlasLocation::DiskDepdencency{ path } => {
+                todo!()
+            },
+            AtlasLocation::NetDependency{ url, version } => {
+                todo!()
+            },
+        };
+        Ok(resolved)
+    }
 
-        let tokens = lexer::tokenize(&source, location.url.clone(), false)
-            .map_err(|error| LoadError::LexerError{location:location.url.clone(), error})?;
+    pub fn load_file(&self, span: Span, location: String) -> Result<Option<Vec<Statement>>, LoadError> {
+        //if location.subspace.is_some() { todo!() }
+        //if self.files.contains_key(&location) { return Ok(None) }
+
+        let source = fs::read_to_string(location.clone())
+            .map_err(|_| LoadError::FileNotFound{span, location:location.clone()})?;
+
+        let tokens = lexer::tokenize(&source, location.clone(), false)
+            .map_err(|error| LoadError::LexerError{location:location.clone(), error})?;
 
         let ast = parser::parse(tokens)
-            .map_err(|error| LoadError::ParseError{location:location.url.clone(), error})?;
+            .map_err(|error| LoadError::ParseError{location:location.clone(), error})?;
 
         Ok(Some(ast))
     }

@@ -90,7 +90,8 @@ pub struct AzimuthInfo {
 pub struct ObjectInfo {
     pub id: ObjectId,
     pub name: Identifier,
-    pub known_shapes: Vec<ValueKind>
+    pub known_shapes: Vec<ValueKind>,
+    pub static_origin: Option<NamespaceId>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -540,14 +541,8 @@ macro_rules! numeric_binop {
             Operator::BWXor    => Ok(ResolvedExpression::Value($span, (left ^ right).into())),
             Operator::BWShiftL => Ok(ResolvedExpression::Value($span, (left << right).into())),
             Operator::BWShiftR => Ok(ResolvedExpression::Value($span, (left >> right).into())),
-            Operator::Range    => Ok(ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32))),
-            Operator::RangeLT  => {
-                if left == right {
-                    Ok(ResolvedExpression::Value($span, Value::Array(Vec::new(), ValueKind::Number(NumKind::Int32))))
-                } else {
-                    Ok(ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32 + if left > right { 1 as i32 } else { -1 as i32 })))
-                }
-            }
+            Operator::Range    => Ok(ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32, true))),
+            Operator::RangeLT  => Ok(ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32, false))),
             op => Err(CompileError::InvalidBinaryOp { span: $span, operator: op, left: left.into(), right: right.into() }),
         }
     }};
@@ -776,7 +771,7 @@ impl Analyzer {
         scope.symbols.insert(identifier.clone(), symbol);
     }
 
-    fn declare_object(&mut self, scope: ScopeId, name: Identifier, shape: ResolvedShapeExpression) -> (ObjectInfo, LocalId) {
+    fn declare_object(&mut self, scope: ScopeId, name: Identifier, shape: ResolvedShapeExpression, static_origin:Option<NamespaceId>) -> (ObjectInfo, LocalId) {
         let id = self.next_object_id.clone();
         self.next_object_id += 1;
 
@@ -801,7 +796,7 @@ impl Analyzer {
 
         let local = self.declare_local(scope, name.clone(), known_shapes.clone());
 
-        (ObjectInfo{id: id, name: name, known_shapes:known_shapes.clone()}, local)
+        (ObjectInfo{id: id, name: name, known_shapes:known_shapes.clone(), static_origin}, local)
     }
 
     fn declare_local(&mut self, scope: ScopeId, name: Identifier, known_shapes: Vec<ValueKind>) -> LocalId {
@@ -868,7 +863,7 @@ impl Analyzer {
                     }
                 }
             }
-            ValueKind::String | ValueKind::Bool | ValueKind::Array(_) | ValueKind::Number(_) => {
+            ValueKind::String | ValueKind::Bool | ValueKind::Array(_) | ValueKind::Number(_) | ValueKind::Range(_) => {
                 let name = match self.get_primitive_shape(target_kind)? {
                     Some(info) => info.name.clone(),
                     None => return Err(CompileError::UndefinedSymbol { span, name: member })
@@ -1078,7 +1073,14 @@ impl Analyzer {
                     },
 
                     // No provided qualifier
-                    None => self.get_member_without_qualifier(&target.kind(), member, span.clone(), scope)?
+                    None => match &target {
+                        ResolvedExpression::Variable(_, Symbol::Object(info)) if info.static_origin.is_some() => 
+                            match self.get_azimuth(&span, scope, member.clone(), info.static_origin.clone(), None)? {
+                                Some(info) => info,
+                                None => return Err(CompileError::UndefinedSymbol { span, name: member }),
+                            },
+                        _ => self.get_member_without_qualifier(&target.kind(), member, span.clone(), scope)?
+                    }
                 };
 
                 Ok(ResolvedExpression::MemberAccess{span, 
@@ -1273,7 +1275,7 @@ impl Analyzer {
 
                 let shape = self.resolve_shape_expression(shape, scope)?;
     
-                let (info, local) = self.declare_object(scope, name, shape.clone());
+                let (info, local) = self.declare_object(scope, name, shape.clone(), None);
                 Ok(ResolvedStatement::DeclareObject{ span, local, info, shape })
             }
             Statement::DeclareLocal { span, name, value } => {
@@ -1425,7 +1427,8 @@ impl Analyzer {
 
                 let iterable_type = match target.kind() {
                     ValueKind::Array(kind) => ShapeExpression::Primitive(span.clone(), *kind),
-                    other => return Err(CompileError::Error{span, message:format!("Expected array in for loop declaration, got {:?}",other)}),
+                    ValueKind::Range(kind) => ShapeExpression::Primitive(span.clone(), ValueKind::Number(kind)),
+                    other => return Err(CompileError::Error{span, message:format!("Expected array or range in for loop declaration, got {:?}",other)}),
                 };
 
                 let new_scope = self.create_scope(scope);
@@ -1526,6 +1529,7 @@ impl Analyzer {
                 ValueKind::Bool => "::Bool",
                 ValueKind::String => "::String",
                 ValueKind::Array(_) => "::Array",
+                ValueKind::Range(_) => "::Range",
                 _ => todo!()
             }) {
                 return Ok(Some(shape))
@@ -1591,7 +1595,8 @@ impl Analyzer {
             let info = self.declare_object(
                 scope, 
                 format!("{}::Static", namespace.name), 
-                ResolvedShapeExpression::Primitive(span.clone(), ValueKind::Shape(OBJECT_INSTANCE))
+                ResolvedShapeExpression::Primitive(span.clone(), ValueKind::Shape(OBJECT_INSTANCE)),
+                Some(namespace.name),
             ).0;
             let azimuths = namespace.azimuths.iter().map(|az| az.id).collect();
             self.namespace_static_info.insert(namespace.id, (info.clone(), azimuths));
@@ -1716,7 +1721,7 @@ impl Analyzer {
         for (loc, namespace, namespace_id) in &load_order {
             let file = match files.get(&loc) {
                 Some(file) => file,
-                None => return Err(CompileError::Error { span:Span::new(0,0, loc.url.clone()), message: format!("Fucked up") }),
+                None => panic!("Something bad happened: {:?} wasn't in {:?}", loc, files)
             };
 
             let new_scope = *self.namespace_scopes.get(&namespace_id).unwrap_or(&0);

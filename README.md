@@ -14,7 +14,7 @@ Each shape has a number of default mappings, functions, and slots which act as v
 ### Atlas
 
 The atlas file is where your project is defined and organized. It contains the dependencies for your project and its exports.
-In the root directory of your project, the compiler expects a file called "atlas.atls" to be the root of your project.
+In the root directory of your project, the compiler is provided a named atlas to be the root of your project.
 Atlas syntax looks like this:
 
     dependencies {
@@ -26,7 +26,7 @@ Atlas syntax looks like this:
     }
 
 The "chart" section is where you define your modules. The identifier following the word "chart" is the name of your project.
-The compiler will load all of the files according to their dependencies, and execute them one at a time in the specified order.
+The compiler will load all of the files according to their dependencies, and execute them one at a time in the specified load order.
 Namespaces can be defined by file, by namespace definition within a file, or by entire directory.
 Other atlases can be linked as sub-namespaces of the super one.
 
@@ -125,9 +125,15 @@ Functions are written just like any other azimuth, but with parenthesis followin
     PrintFoo() 
         print "foo"
     
-    PrintBar(x string) {
+    PrintBar(string x) {
         print "bar"
         print x
+    }
+
+Object parameters can be listed with multiple input types for multiple minimum requirements.
+
+    PrintIdAndName(Named Identified x) {
+        print "Id: \{x.Id}, Name: \{x.Name}"
     }
 
 Functions are non-static implicitly and can be made static with the "static" keyword. Adding "self" as the first parameter makes it into a static function acting upon the caller as "self", which is the exact explicit form of the first pattern.
@@ -176,7 +182,7 @@ Lymphnoids are actually just function signatures in the compiler, so any functio
     foo(|(int32, int32) -> int32| function, int32 x, int32 y) 
         print function(x, y)
 
-    foo(|(x, y) -> x + y|, 5, 6)    // works
+    foo(|(x, y) -> x + y|, 5, 6)    // lymphnoids work
 
     sum(int32 x, int32 y) -> int32 
         return x + y
@@ -235,12 +241,12 @@ Ternaries are also supported
 
     print (x == y) ? someThing : someThingElse
 
-Numbers can be written with various prefixes.
+Numbers can be written with various prefixes. Underscores separate digits visually.
 
     0xFF        // Hex
     0o778       // Octal
     0b1100_1111 // Binary
-    0c100       // Decimal (default)
+    0c123_456   // Decimal (default)
 
 ### Shapes
 
@@ -381,7 +387,7 @@ To access the variables of an object, use a "." dot operator followed by the nam
 
     print foo.Name
 
-There are times when there are identifiers with the same name on an object. This will cause a runtime error if there are multiple with the same name when it is called. In case of ambiguous names, the shape name can also be provided as a clarifier. This also allows lensing from specific inheritance layers.
+There are times when there are identifiers with the same name on an object. This will cause a compiler error if there are multiple with the same name when it is called. In case of ambiguous names, the shape name can also be provided as a clarifier. This also allows lensing from specific inheritance layers.
 
     print foo::Named.Name
 
@@ -435,13 +441,13 @@ Mappings can go either way from the corresponding shapes, and types are resolved
 
     print object.Value  // Value is an int
 
-Objects can be sealed using the "seal" keyword to prevent any additional attachments or detachments. This is important for safety or critical operations. Modified objects will need to be an unsealed copy. Attempting to attach or detach to the object will cause a runtime error. Sealing an array also seals every member of the array.
+Objects can be sealed using the "seal" keyword to prevent any additional attachments or detachments. This is important for safety or critical operations. Modified objects will need to be an unsealed copy. Attempting to attach or detach to the object will cause a runtime error.
 
     let user := UserData
     seal user
 
     user := DataStealer
-    // Runtime error
+    // Compile error
 
 Objects can be tested for shape compatability using the "=~" is shape and "!~" isn't shape operators. These will compare whether an object meets the minimum mappings for a certain shape. This is strict to mappings based on the default mappings of the shape, but azimuths without default mappings could pull from anywhere.
 

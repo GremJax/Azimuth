@@ -14,12 +14,12 @@ shape EternalNesting {
     Nested EternalNesting?
 
     Nest(EternalNesting inside) {
-        if self::EternalNesting.Nested == null self::EternalNesting.Nested = inside
-        else self::EternalNesting.Nested.Nest(inside)
+        if self.Nested == null self.Nested = inside
+        else self.Nested.Nest(inside)
     }
 
     Layers() -> string {
-        return "Bingus. \{self::EternalNesting.Nested?.Layers() ?? "Such is the way."}"
+        return "Bingus. \{self.Nested?.Layers() ?? "Such is the way."}"
     }
 }
 
@@ -142,6 +142,46 @@ extension FunctionRemap2 {
     }
 }
 
+shape SameName {
+    Value bool
+}
+shape SameName2 {
+    Value string
+}
+
+let bob := SameName
+let bill := SameName2
+
+bob.Value = true
+bill.Value = "hello"
+
+print bob.Value
+print bill.Value
+
 funcRemap.ExtensionCall()
 
 print 5 + 5
+
+print IO.ReadLine()
+
+print 1 ... 20
+
+for i in 1 ... 20
+    print i
+
+for i in 1 ..< 20
+    print i
+    
+for i in 20 ... 1
+    print i
+    
+for i in 20 ..< 1
+    print i
+    
+for i in 1 ... 1
+    print i
+    
+for i in 1 ..< 1
+    print i
+
+print (1 ... 10).ToArray()

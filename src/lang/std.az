@@ -106,18 +106,18 @@ namespace Random {
     static intrinsic Range(int from, int to) -> int32
 
     static Chance(int chance) -> bool 
-        return Range(1, chance) == 1
+        return Random.Range(1, chance) == 1
 
     static Bool() -> bool 
-        return Chance(2)
+        return Random.Chance(2)
 }
 
 shape Error {
     Message string
-    Throw() throw self::Error.Message
+    Throw() throw self.Message
 
     static Try(|() -> Object| func) -> bool
-        return func() =~ Error
+        return func() !~ Error
 }
 
 shape Executor {
@@ -169,6 +169,13 @@ shape Array<T> {
     intrinsic Remove(T item, int32 index) -> bool
 }
 
+shape Range {
+    intrinsic ToArray() -> int[]
+
+    intrinsic Create(int start, int end, int by) -> range
+    intrinsic CreateExclusive(int start, int end, int by) -> range
+}
+
 shape Comparable<T> {
     abstract Compare(T other) -> int32
 }
@@ -195,11 +202,11 @@ shape Benchmarking {
     StartTime uint64 = 0
 
     Start() {
-        self::Benchmarking.StartTime = GetTime()
+        self.StartTime = GetTime()
     }
 
     Stop() {
-        let difference = GetTime() - self::Benchmarking.StartTime
+        let difference = GetTime() - self.StartTime
         print "Time in millis: \{difference}"
     }
 }
@@ -212,8 +219,19 @@ shape Int32 {
 }
 
 shape Bool {
+    static Eq(bool x, bool y) -> bool
+        return x == y
+    static NEq(bool x, bool y) -> bool
+        return x != y
+    static And(bool x, bool y) -> bool
+        return x && y
+    static Or(bool x, bool y) -> bool
+        return x || y
+    static Not(bool x) -> bool
+        return !x
+
     static Parse(string input) -> bool?
-        switch input::String.Lower()::String.Trim() {
+        switch input.Lower().Trim() {
             "true" -> return true
             "false" -> return false
             else -> return null

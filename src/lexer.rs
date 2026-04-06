@@ -316,6 +316,43 @@ impl Lexer {
                     }
                 }
 
+                // Check type suffix
+                let kind = match chars.peek() {
+                    Some('i') => {
+                        chars.next();
+                        match chars.next() {
+                            Some('8') => NumKind::Int8,
+                            Some('1') if self.next_is('6', chars)? => NumKind::Int16,
+                            Some('3') if self.next_is('2', chars)? => NumKind::Int32,
+                            Some('6') if self.next_is('4', chars)? => NumKind::Int64,
+                            Some(other) => return Err(ParseError::InvalidToken { span, token: format!("{}i{}", digits, other) }),
+                            None => return Err(ParseError::EOF(format!("Number suffix")))
+                        }
+
+                    }
+                    Some('u') => {
+                        chars.next();
+                        match chars.next() {
+                            Some('8') => NumKind::UInt8,
+                            Some('1') if self.next_is('6', chars)? => NumKind::UInt16,
+                            Some('3') if self.next_is('2', chars)? => NumKind::UInt32,
+                            Some('6') if self.next_is('4', chars)? => NumKind::UInt64,
+                            Some(other) => return Err(ParseError::InvalidToken { span, token: format!("{}u{}", digits, other) }),
+                            None => return Err(ParseError::EOF(format!("Number suffix")))
+                        }
+                    }
+                    Some('f') => {
+                        chars.next();
+                        match chars.next() {
+                            Some('3') if self.next_is('2', chars)? => NumKind::Float32,
+                            Some('6') if self.next_is('4', chars)? => NumKind::Float64,
+                            Some(other) => return Err(ParseError::InvalidToken { span, token: format!("{}f{}", digits, other) }),
+                            None => return Err(ParseError::EOF(format!("Number suffix")))
+                        }
+                    }
+                    _ => NumKind::Float64
+                };
+
                 // Parse based on radix
                 let value = if radix == 10 {
                     digits.parse::<f64>().map_err(|_| ParseError::InvalidToken{span:span.clone(), token:digits})?
@@ -345,7 +382,7 @@ impl Lexer {
             '[' => Ok(Token{span:self.span(), kind:TokenKind::LeftBracket}),
             ']' => Ok(Token{span:self.span(), kind:TokenKind::RightBracket}),
             ',' => Ok(Token{span:self.span(), kind:TokenKind::Comma}),
-            _ if ch.is_alphabetic() || ch == '_' => {
+            _ if ch.is_alphanumeric() || ch == '_' => {
                 let span= self.span();
                 let mut identifier = String::new();
                 identifier.push(ch);
@@ -403,6 +440,7 @@ impl Lexer {
                     "or" => TokenKind::Operator(Operator::Or),
 
                     "number" => TokenKind::Type(ValueKind::Number(NumKind::Any)),
+                    "range" => TokenKind::Type(ValueKind::Range(NumKind::Any)),
 
                     "int8" => TokenKind::Type(ValueKind::Number(NumKind::Int8)),
                     "byte" => TokenKind::Type(ValueKind::Number(NumKind::Int8)),

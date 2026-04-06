@@ -6,6 +6,7 @@ use crate::{
     Mapping, ObjectId, Number, Runtime, ShapeId, Value, ValueKind, executor,
     analyzer::{ResolvedExpression, ResolvedShapeExpression, ResolvedStatement, Symbol},
 };
+use core::num;
 use std::collections::{HashMap, HashSet};
 use std::{fs, usize};
 
@@ -59,12 +60,8 @@ macro_rules! numeric_binop {
             Operator::BWShiftL => Ok((left << right).into()),
             Operator::BWShiftR => Ok((left >> right).into()),
             
-            Operator::Range => Ok(create_range(left as i32, right as i32)),
-            Operator::RangeLT => {
-                if left == right { Ok(Value::Array(Vec::new(), ValueKind::Number(NumKind::Int32))) }
-                else if left > right { Ok(create_range(left as i32, right as i32 + 1)) }
-                else { Ok(create_range(left as i32, right as i32 - 1)) }
-            } 
+            Operator::Range => Ok(create_range(left as i32, right as i32, true)),
+            Operator::RangeLT => Ok(create_range(left as i32, right as i32, false)),
             
             operator => Err(RuntimeError::InvalidOperator { span:$span, operator, operand: ValueKind::Number(NumKind::Any) }),
         }
@@ -130,7 +127,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                         Operator::Sub => Ok((-val).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Number(NumKind::Int32) })
                     }
-                },   
+                },
                 (op, Value::String(val)) => 
                     match op {
                         Operator::Len => Ok((val.len() as i32).into()),
@@ -293,8 +290,21 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     match array.get(index.to_i32() as usize) {
                         Some(value) => Ok(value.clone()),
                         None if optional => Ok(Value::None),
-                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds", index)}),
+                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, array.len() - 1)}),
                     }
+                }
+                (Value::Range(start, end, by, inclusive, _), Value::Number(index)) => {
+                    let start = start.to_i32();
+                    let end = end.to_i32();
+                    let by = by.to_i32();
+                    let index = index.to_i32();
+
+                    let num = start + (by * index);
+                    if (inclusive && num >= end) || num > end {
+                        return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, end)})
+                    }
+
+                    Ok(Value::Number(Number::Int32(num)))
                 }
                 (Value::None, _) if chained => Ok(Value::None),
                 (other, member) => Err(RuntimeError::Error{span, message:format!("Array access not permitted for {:?}.{:?}", other, member)}),
@@ -503,20 +513,9 @@ pub fn evaluate_place(runtime: &mut Runtime, expression:ResolvedExpression) -> R
     }
 }
 
-pub fn create_range(from: i32, to: i32) -> Value {
-
-    let values: Vec<Value> = if from <= to {
-        (from..=to)
-            .map(|i| i.into())
-            .collect()
-    } else {
-        (to..=from)
-            .rev()
-            .map(|i| i.into())
-            .collect()
-    };
-
-    Value::Array(values, ValueKind::Number(NumKind::Int32))
+pub fn create_range(from: i32, to: i32, inclusive: bool) -> Value {
+    let by = if from <= to { 1 } else { -1 }; 
+    Value::Range(Number::Int32(from), Number::Int32(to), Number::Int32(by), inclusive, NumKind::Int32)
 }
 
 pub fn execute(runtime: &mut Runtime, ast: Vec<ResolvedStatement>, static_info: HashMap<u32, (ObjectInfo, Vec<AzimuthId>)>) -> Result<ExecFlow, RuntimeError> {
@@ -778,23 +777,53 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
 
         ResolvedStatement::For{ span, local, target, statement } => {
             
-            let target = match evaluate(runtime, target)? {
-                Value::Array(vec, _) => vec,
-                other => return Err(RuntimeError::TypeMismatch { span, found: other, expected: ValueKind::Array(Box::new(ValueKind::None)) }),
-            };
+            match evaluate(runtime, target)? {
 
-            for item in target {
-                runtime.reserve_local(local, item);
+                // Array
+                Value::Array(vec, _) => {
+                    for item in vec {
+                        runtime.reserve_local(local, item);
 
-                match execute_statement(runtime, *statement.clone())? {
-                    ExecFlow::Continue(_) => continue,
-                    ExecFlow::Break(_) => break,
-                    ExecFlow::Normal(_) => {},
-                    ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
-                    flow => return Ok(flow)
+                        match execute_statement(runtime, *statement.clone())? {
+                            ExecFlow::Continue(_) => continue,
+                            ExecFlow::Break(_) => break,
+                            ExecFlow::Normal(_) => {},
+                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
+                            flow => return Ok(flow)
+                        }
+
+                        runtime.deref_local(local, 1);
+                    }
+                },
+
+                // Range
+                Value::Range(start, end, by, inclusive, _) => {
+
+                    let (start, end, by) = (start.to_i32(), end.to_i32(), by.to_i32());
+                    
+                    let range: Box<dyn Iterator<Item = i32>> = match (inclusive, start <= end) {
+                        (true,  true)  => Box::new((start..=end).step_by(by as usize)),
+                        (true,  false) => Box::new((0..=(start - end) / -by).map(move |i| start + i * by)),
+                        (false, true)  => Box::new((start..end).step_by(by as usize)),
+                        (false, false) => Box::new((0..(start - end) / -by).map(move |i| start + i * by)),
+                    };
+                    
+                    for num in range {
+                        let item = num.into();
+                        runtime.reserve_local(local, item);
+
+                        match execute_statement(runtime, *statement.clone())? {
+                            ExecFlow::Continue(_) => continue,
+                            ExecFlow::Break(_) => break,
+                            ExecFlow::Normal(_) => {},
+                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
+                            flow => return Ok(flow)
+                        }
+
+                        runtime.deref_local(local, 1);
+                    }
                 }
-
-                runtime.deref_local(local, 1);
+                other => return Err(RuntimeError::TypeMismatch { span, found: other, expected: ValueKind::Array(Box::new(ValueKind::None)) }),
             }
 
             Ok(ExecFlow::Normal(span))

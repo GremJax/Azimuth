@@ -21,6 +21,7 @@ pub enum ValueKind {
     Number(NumKind),
     Bool,
     String,
+    Range(NumKind),
     Shape(ShapeInstance),
     Array(Box<ValueKind>),
     Azimuth(Box<ValueKind>),
@@ -81,6 +82,11 @@ impl ValueKind {
             ValueKind::Shape(k) => other == ValueKind::Shape(k.clone()),
             ValueKind::Array(k) => match other {
                 ValueKind::Array(other_k) => k.is_assignable_from(*other_k),
+                _ => false,
+            },
+            ValueKind::Range(k) => match other {
+                ValueKind::Range(other_k) => ValueKind::Number(*k).is_assignable_from(ValueKind::Number(other_k)),
+                ValueKind::Array(other_k) => ValueKind::Number(*k).is_assignable_from(*other_k),
                 _ => false,
             },
             ValueKind::Azimuth(k) => match other {
@@ -145,7 +151,7 @@ pub enum Number {
 }
 
 #[derive(Copy, Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum NumKind {
+pub enum NumKind {
     Any,
     UInt8,
     UInt16,
@@ -326,6 +332,7 @@ pub enum Value {
     String(String),
 
     Array(Vec<Value>, ValueKind),
+    Range(Number, Number, Number, bool, NumKind),
     
     Azimuth(AzimuthState),
     Object(ObjectId, ValueKind),
@@ -359,7 +366,15 @@ impl Value {
                 string.push(']');
                 string
             }
-            val => format!("{:?}", val),
+            Value::Range(start, end, by, inclusive, _) =>
+                format!("{}{}{}", start.to_string(), if *inclusive { "..." } else { "..<" }, end.to_string()),
+            Value::Object(id, shape) =>
+                format!("Obj{}: {:?}", id, shape),
+            Value::Pointer(id, az, shape) =>
+                format!("Obj{}.{}: {:?}", id, az, shape),
+            Value::Function(func) => 
+                format!("|({:?}) -> {:?} {:?}|", func.input_types, func.output_type, func.func),
+            other => format!("{:?}", other),
         }
     }
 
@@ -369,6 +384,7 @@ impl Value {
             Value::Bool(_) => ValueKind::Bool,
             Value::String(_) => ValueKind::String,
             Value::Array(_, value_type) => ValueKind::Array(Box::new(value_type.clone())),
+            Value::Range(_,_,_,_,kind) => ValueKind::Range(kind.clone()),
             Value::Azimuth(s) => ValueKind::Azimuth(Box::new(s.value_type.clone())),
             Value::Object(_, kind) => kind.clone(),
             Value::Shape(inst) => ValueKind::Shape(inst.clone()),
@@ -389,20 +405,7 @@ impl Value {
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Number(val) =>
-                write!(f, "{:?}", val),
-            Value::Bool(val) =>
-                write!(f, "{}", val),
-            Value::String(val) =>
-                write!(f, "{}", val),
-            Value::Object(id, shape) =>
-                write!(f, "Obj{}: {:?}", id, shape),
-            Value::Pointer(id, az, shape) =>
-                write!(f, "Obj{}.{}: {:?}", id, az, shape),
-            val => 
-                write!(f, "{:?}", val),
-        }
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -1384,6 +1387,7 @@ impl Runtime {
                 ValueKind::Bool => "Bool",
                 ValueKind::String => "String",
                 ValueKind::Array(_) => "Array",
+                ValueKind::Range(_) => "Range",
                 _ => todo!()
             }) {
                 return Some(shape.id)

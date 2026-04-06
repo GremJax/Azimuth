@@ -4,7 +4,7 @@ use crate::analyzer::{CompileError, LocalId};
 use crate::executor::{OBJECT_INSTANCE, ShapeInstance};
 use crate::intrinsic::IntrinsicOp;
 use crate::lexer::{self, Keyword, Operator, Span, Token, TokenKind, UNARY_OPERATORS};
-use crate::loader::{AtlasLocation, AtlasMapping, NamespaceId};
+use crate::loader::{AtlasLocation, AtlasMapping, AtlasMappingFlags, NamespaceId};
 use crate::{AzimuthFlags, Function, FunctionSignature, Value, ValueKind, intrinsic};
 
 #[derive(Debug, Clone)]
@@ -1475,10 +1475,47 @@ pub fn parse_atlas(tokens: &mut PeekableTokens) -> Result<ParsedAtlas, ParseErro
     
     let mut mappings = Vec::new();
     loop {
-        let token = next(tokens, format!("atlas chart"))?;
-        match token.kind {
-            TokenKind::RightBrace => break,
-            TokenKind::Identifier(name) => {
+        let token = tokens.peek().unwrap();
+        match &token.kind {
+            TokenKind::RightBrace => {
+                tokens.next(); 
+                break   
+            }
+            TokenKind::Comma => {
+                tokens.next();
+            }
+            _ => {
+                let hidden = match tokens.peek().unwrap().kind {
+                        TokenKind::Keyword(Keyword::Hidden) => {
+                            tokens.next();
+                            true
+                        }
+                        _ => false
+                    };
+
+                let lazy = match tokens.peek().unwrap().kind {
+                        TokenKind::Keyword(Keyword::Lazy) => {
+                            tokens.next();
+                            true
+                        }
+                        _ => false
+                    };
+
+                let trailhead = match tokens.peek().unwrap().kind {
+                        TokenKind::Keyword(Keyword::Trailhead) => {
+                            tokens.next();
+                            true
+                        }
+                        _ => false
+                    };
+
+                // Namespace
+                let token = next(tokens, format!("atlas chart"))?;
+                let from = match token.kind {
+                    TokenKind::Identifier(from) => from,
+                    other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("Namespace Identifier"), loc:format!("atlas chart") }),
+                };
+
                 // Arrow
                 let token = next(tokens, format!("atlas chart"))?;
                 match token.kind {
@@ -1489,9 +1526,8 @@ pub fn parse_atlas(tokens: &mut PeekableTokens) -> Result<ParsedAtlas, ParseErro
                 // Mapping
                 let filename = parse_atlas_filename(tokens)?;
 
-                mappings.push(AtlasMapping{from:name, to:filename});
+                mappings.push(AtlasMapping{from, to:filename, flags:AtlasMappingFlags{ hidden, lazy, trailhead }});
             }
-            other => return Err(ParseError::UnexpectedToken { span:token.span, token:other, loc:format!("atlas chart") }),
         }
     }
     
@@ -1502,6 +1538,10 @@ pub fn parse_atlas(tokens: &mut PeekableTokens) -> Result<ParsedAtlas, ParseErro
     }
 
     Ok(ParsedAtlas{name, dependencies, mappings})
+}
+
+pub fn parse_atlas_dependency(tokens: &mut PeekableTokens) -> Result<AtlasLocation, ParseError> {
+    todo!()
 }
 
 pub fn parse_atlas_filename(tokens: &mut PeekableTokens) -> Result<AtlasLocation, ParseError> {
@@ -1525,7 +1565,7 @@ pub fn parse_atlas_filename(tokens: &mut PeekableTokens) -> Result<AtlasLocation
         _ => None,
     };
 
-    Ok(AtlasLocation{url:location, subspace})
+    Ok(AtlasLocation::LocalFile{path:location})
 }
 
 pub fn next(tokens: &mut PeekableTokens, loc: String) -> Result<Token, ParseError> {

@@ -80,7 +80,7 @@ let root := EternalNesting
 //loop {
 //    let input = IO.ReadLine() ?? "stop"
 //    if input == "stop" break
-///    
+//
 //    depth += 1
 //    //let inside := EternalNesting
 //    //root.Nest(inside)
@@ -201,3 +201,13 @@ print deed[2]
 for char in deed {
     print char
 }
+
+let set = {1, 2, 5, 5, 2}
+print set
+print set.Contains(5)
+
+let dict = {"billy":1, "john":2, "billy":3}
+print dict
+
+print {}
+print {:}

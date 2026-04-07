@@ -68,6 +68,29 @@ macro_rules! numeric_binop {
     }};
 }
 
+macro_rules! float_binop {
+    ($span:expr, $left:expr, $right:expr, $operator:expr, $t:ty) => {{
+        let left = $left as $t;
+        let right = $right as $t;
+        match $operator {
+            Operator::Equal => Ok((left == right).into()),
+            Operator::NEqual => Ok((left != right).into()),
+            Operator::LT => Ok((left < right).into()),
+            Operator::GT => Ok((left > right).into()),
+            Operator::LTE => Ok((left <= right).into()),
+            Operator::GTE => Ok((left >= right).into()),
+            
+            Operator::Add => Ok((left + right).into()),
+            Operator::Sub => Ok((left - right).into()),
+            Operator::Mul => Ok((left * right).into()),
+            Operator::Div => Ok((left / right).into()),
+            Operator::Mod => Ok((left % right).into()),
+ 
+            operator => Err(RuntimeError::InvalidOperator { span:$span, operator, operand: ValueKind::Number(NumKind::Any) }),
+        }
+    }};
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct ShapeInstance {
     pub id: ShapeId,
@@ -89,6 +112,20 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                 values.push(evaluate(runtime, item)?);
             }
             Ok(Value::Array(values, kind))
+        },
+        ResolvedExpression::Set(_, expressions, kind) => {
+            let mut values = HashSet::new();
+            for item in expressions {
+                values.insert(evaluate(runtime, item)?);
+            }
+            Ok(Value::Set(values.iter().cloned().collect(), kind))
+        },
+        ResolvedExpression::Dict(_, expressions, key_kind, value_kind) => {
+            let mut values = HashMap::new();
+            for (key, val) in expressions {
+                values.insert(evaluate(runtime, key)?, evaluate(runtime, val)?);
+            }
+            Ok(Value::Dict(values.iter().map(|(k,v)| (k.clone(),v.clone())).collect(), key_kind, value_kind))
         },
         ResolvedExpression::Variable(_, Symbol::Object(k)) => Ok(Value::Object(k.id, ValueKind::Shape(OBJECT_INSTANCE))),
         ResolvedExpression::Variable(span, Symbol::Local(k)) => { 
@@ -137,6 +174,16 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     match op {
                         Operator::Len => Ok((vec.len() as i32).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Array(Box::new(val)) })
+                    },
+                (op, Value::Set(vec, val)) => 
+                    match op {
+                        Operator::Len => Ok((vec.len() as i32).into()),
+                        operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Set(Box::new(val)) })
+                    },
+                (op, Value::Dict(vec, key, val)) => 
+                    match op {
+                        Operator::Len => Ok((vec.len() as i32).into()),
+                        operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Dict(Box::new(key),Box::new(val)) })
                     },
 
                 (operator, operand) => Err(RuntimeError::Error{ span, message: format!("Invalid operation: {:?} {:?}", operator, operand) })
@@ -192,8 +239,8 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     };
                     let kind = Number::promote_kind(left.num_kind(), right.num_kind());
                     match kind {
-                        //NumKind::Float64 => numeric_binop!(span, left.to_f64(), right.to_f64(), operator, f64),
-                        //NumKind::Float32 => numeric_binop!(span, left.to_f32(), right.to_f32(), operator, f32),
+                        NumKind::Float64 => float_binop!(span, left.to_f64(), right.to_f64(), op, f64),
+                        NumKind::Float32 => float_binop!(span, left.to_f32(), right.to_f32(), op, f32),
                         NumKind::UInt64  => numeric_binop!(span, left.to_u64(), right.to_u64(), op, u64),
                         NumKind::Int64   => numeric_binop!(span, left.to_i64(), right.to_i64(), op, i64),
                         NumKind::UInt32  => numeric_binop!(span, left.to_u32(), right.to_u32(), op, u32),
@@ -784,72 +831,41 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
 
         ResolvedStatement::For{ span, local, target, statement } => {
             
-            match evaluate(runtime, target)? {
-                
-                // String
-                Value::String(string) => {
-                    for char in string.as_bytes() {
-                        let item = Value::String(format!("{}",*char as char));
-
-                        runtime.reserve_local(local, item);
-
-                        match execute_statement(runtime, *statement.clone())? {
-                            ExecFlow::Continue(_) => continue,
-                            ExecFlow::Break(_) => break,
-                            ExecFlow::Normal(_) => {},
-                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
-                            flow => return Ok(flow)
-                        }
-
-                        runtime.deref_local(local, 1);
-                    }
-                },
-
-                // Array
-                Value::Array(vec, _) => {
-                    for item in vec {
-                        runtime.reserve_local(local, item);
-
-                        match execute_statement(runtime, *statement.clone())? {
-                            ExecFlow::Continue(_) => continue,
-                            ExecFlow::Break(_) => break,
-                            ExecFlow::Normal(_) => {},
-                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
-                            flow => return Ok(flow)
-                        }
-
-                        runtime.deref_local(local, 1);
-                    }
-                },
-
-                // Range
+            let iter: Box<dyn Iterator<Item = Value>> = match evaluate(runtime, target)? {
+                Value::Set(val, _) => Box::new(val.into_iter()),
+                Value::Array(vec, _) => Box::new(vec.into_iter()),
+                Value::String(string) => Box::new(
+                    string.into_bytes().into_iter()
+                        .map(|c| Value::String((c as char).to_string()))
+                ),
                 Value::Range(start, end, by, inclusive, _) => {
-
                     let (start, end, by) = (start.to_i32(), end.to_i32(), by.to_i32());
-                    
                     let range: Box<dyn Iterator<Item = i32>> = match (inclusive, start <= end) {
                         (true,  true)  => Box::new((start..=end).step_by(by as usize)),
                         (true,  false) => Box::new((0..=(start - end) / -by).map(move |i| start + i * by)),
                         (false, true)  => Box::new((start..end).step_by(by as usize)),
                         (false, false) => Box::new((0..(start - end) / -by).map(move |i| start + i * by)),
                     };
-                    
-                    for num in range {
-                        let item = num.into();
-                        runtime.reserve_local(local, item);
+                    Box::new(range.map(|n| Value::Number(Number::Int32(n))))
+                },
+                other => return Err(RuntimeError::TypeMismatch { 
+                    span, found: other, 
+                    expected: ValueKind::Array(Box::new(ValueKind::None)) 
+                }),
+            };
 
-                        match execute_statement(runtime, *statement.clone())? {
-                            ExecFlow::Continue(_) => continue,
-                            ExecFlow::Break(_) => break,
-                            ExecFlow::Normal(_) => {},
-                            ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
-                            flow => return Ok(flow)
-                        }
+            for item in iter {
+                runtime.reserve_local(local, item);
 
-                        runtime.deref_local(local, 1);
-                    }
+                match execute_statement(runtime, *statement.clone())? {
+                    ExecFlow::Continue(_) => continue,
+                    ExecFlow::Break(_) => break,
+                    ExecFlow::Normal(_) => {},
+                    ExecFlow::Declare(_, local) => runtime.deref_local(local, 2),
+                    flow => return Ok(flow)
                 }
-                other => return Err(RuntimeError::TypeMismatch { span, found: other, expected: ValueKind::Array(Box::new(ValueKind::None)) }),
+
+                runtime.deref_local(local, 1);
             }
 
             Ok(ExecFlow::Normal(span))

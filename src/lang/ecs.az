@@ -1,0 +1,10 @@
+using std
+
+static Entities {ulong:Entity} = {:}
+
+shape Entity : Named, Identified, Parenting<Entity> {
+    Tick() {}
+    Load() {}
+    Setup() {}
+}
+

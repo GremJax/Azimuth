@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::{CompileError, LocalId};
 use crate::executor::{OBJECT_INSTANCE, ShapeInstance};
@@ -66,6 +66,8 @@ pub enum Expression {
     Value(Span, Value),
     StringFormat(Span, Vec<Expression>),
     Array(Span, Vec<Expression>, Option<ValueKind>),
+    Set(Span, Vec<Expression>, Option<ValueKind>),
+    Dict(Span, Vec<(Expression, Expression)>, Option<ValueKind>, Option<ValueKind>),
     Range(Span, Value, Value),
     Variable(Span, Identifier),
     Option(Span, Box<Option<Expression>>),
@@ -153,6 +155,8 @@ pub enum ShapeExpression {
     Shape(Span, Identifier),
     Primitive(Span, ValueKind),
     Array(Span, Box<ShapeExpression>),
+    Set(Span, Box<ShapeExpression>),
+    Dict(Span, Box<ShapeExpression>, Box<ShapeExpression>),
     Applied {
         span: Span,
         base: Identifier,
@@ -172,6 +176,7 @@ impl ShapeExpression {
             Applied {base, .. } => base.clone(),
             FunctionSignature(_, signature) => todo!(),
             Optional(_, expr) => expr.get_identifier(),
+            _ => todo!(),
         }
     }
 }
@@ -188,7 +193,7 @@ pub struct RawMapping {
     pub from_slot: Identifier,
     pub to_slot: Identifier,
     pub kind: MappingKind,
-    pub shape: Identifier,
+    pub shape: ShapeExpression,
 }
 
 #[derive(Debug, Clone)]
@@ -215,9 +220,9 @@ pub enum Statement {
         span: Span, 
         name: Identifier, 
         slot_ids: Vec<RawAzimuth>,
-        parents: Vec<Identifier>,
+        parents: Vec<ShapeExpression>,
         mappings: Vec<RawMapping>,
-        generics: Vec<ShapeExpression>,
+        generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>,
         extension: bool,
     },
     DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
@@ -385,6 +390,91 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
             Expression::Array(span, elements, None)
         }
 
+        // Set literal
+        TokenKind::LeftBrace => {
+            match &tokens.peek().unwrap().kind {
+                TokenKind::RightBrace => {
+                    tokens.next();
+                    Expression::Set(span, Vec::new(), None)
+                }
+                TokenKind::Operator(Operator::Colon) => {
+                    tokens.next();
+                    let next = next(tokens, format!("Empty Dict literal"))?;
+                    match next.kind {
+                        TokenKind::RightBrace => Expression::Dict(span, Vec::new(), None, None),
+                        other => return Err(ParseError::IncorrectToken { span, token:other, expected:format!("}}"), loc: format!("Empty Dict literal") })
+                    }
+                }
+                _ => {
+                    let first = parse_expression(tokens, 0)?;
+
+                    let token = next(tokens, format!("Set/Dict literal"))?;
+                    match token.kind {
+                        TokenKind::RightBrace => Expression::Set(span, [first].to_vec(), None),
+                        TokenKind::Comma => {
+                            // Set
+                            let mut elements = [first].to_vec();
+
+                            while let Some(token) = tokens.peek() {
+                                if matches!(token.kind, TokenKind::RightBrace) {
+                                    tokens.next();
+                                    break;
+                                }
+
+                                elements.push(parse_expression(tokens, 0)?);
+
+                                if let Some(token) = tokens.peek()
+                                    && matches!(token.kind, TokenKind::Comma) {
+                                    tokens.next();
+                                }
+                            }
+
+                            Expression::Set(span, elements, None)
+                        }
+                        TokenKind::Operator(Operator::Colon) => {
+                            // Dict
+                            let first_val = parse_expression(tokens, 0)?;
+
+                            let token = next(tokens, format!("Dict literal"))?;
+                            match token.kind {
+                                TokenKind::RightBrace => Expression::Dict(span, [(first, first_val)].to_vec(), None, None),
+                                TokenKind::Comma => {
+                                    let mut elements = [(first, first_val)].to_vec(); 
+
+                                    while let Some(token) = tokens.peek() {
+                                        if matches!(token.kind, TokenKind::RightBrace) {
+                                            tokens.next();
+                                            break;
+                                        }
+
+                                        let key = parse_expression(tokens, 0)?;
+
+                                        let token = next(tokens, format!("Dict literal"))?;
+                                        match token.kind {
+                                            TokenKind::Operator(Operator::Colon) => {}
+                                            other => return Err(ParseError::IncorrectToken { span, token:other, expected:format!("}}"), loc: format!("Empty Dict literal") })
+                                        }
+
+                                        elements.push((key, parse_expression(tokens, 0)?));
+
+                                        if let Some(token) = tokens.peek()
+                                            && matches!(token.kind, TokenKind::Comma) {
+                                            tokens.next();
+                                        }
+                                    }
+
+                                    Expression::Dict(span, elements, None, None)
+                                }
+                                other => return Err(ParseError::IncorrectToken { span, token:other, expected:format!(", or }}"), loc: format!("Dict literal") })
+                            }
+                        }
+                        other => return Err(ParseError::IncorrectToken { span, token:other, expected:format!(", or :"), loc: format!("Set/Dict literal") })
+                    }
+                }
+            }
+
+        }
+
         token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("value expression") }),
     };
 
@@ -520,6 +610,46 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
 }
 
 fn parse_shape_expression(tokens: &mut PeekableTokens) -> Result<ShapeExpression, ParseError> {
+    // Collection Literals
+    match tokens.peek().unwrap().kind {
+        // Array
+        TokenKind::LeftBracket => {
+            tokens.next(); // consume '['
+
+            let inner = parse_shape_expression(tokens)?;
+
+            let token = tokens.next().unwrap();
+            match token.kind {
+                TokenKind::RightBracket => return Ok(ShapeExpression::Array(token.span.clone(), Box::new(inner))),
+                other => return Err(ParseError::IncorrectToken { span:token.span.clone(), token: other.clone(), expected: format!("}}"), loc: format!("shape set definition")}) 
+            }
+        }
+        // Set & Dict
+        TokenKind::LeftBrace => {
+            tokens.next(); // consume '{'
+
+            let inner = parse_shape_expression(tokens)?;
+
+            let token = tokens.next().unwrap();
+            match token.kind {
+                TokenKind::RightBrace => return Ok(ShapeExpression::Set(token.span.clone(), Box::new(inner))),
+                TokenKind::Operator(Operator::Colon) => {
+                    let value = parse_shape_expression(tokens)?;
+                    
+                    let token = tokens.next().unwrap();
+                    match token.kind {
+                        TokenKind::RightBrace => {}
+                        other => return Err(ParseError::IncorrectToken { span:token.span.clone(), token: other.clone(), expected: format!("}}"), loc: format!("shape dict definition")}) 
+                    }
+
+                    return Ok(ShapeExpression::Dict(token.span.clone(), Box::new(inner), Box::new(value)))
+                }
+                other => return Err(ParseError::IncorrectToken { span:token.span.clone(), token: other.clone(), expected: format!("}}"), loc: format!("shape set definition")}) 
+            }
+        }
+        _ => {}
+    }
+
     let token = tokens.next().unwrap();
     let span = token.span.clone();
 
@@ -559,18 +689,6 @@ fn parse_shape_expression(tokens: &mut PeekableTokens) -> Result<ShapeExpression
 
     while let Some(token) = tokens.peek() {
         match token.kind {
-            //Array
-            TokenKind::LeftBracket => {
-                tokens.next(); // consume '['
-                let token = tokens.peek().unwrap();
-                if matches!(token.kind, TokenKind::RightBracket) {
-                    tokens.next(); // consume ']'
-                } else { 
-                    return Err(ParseError::IncorrectToken { span:token.span.clone(), token: token.kind.clone(), expected: format!("]"), loc: format!("shape array definition")}) 
-                }
-                
-                base = ShapeExpression::Array(span.clone(), Box::new(base));
-            }
             //Option
             TokenKind::Operator(Operator::Question) => {
                 tokens.next(); // consume '?'
@@ -797,7 +915,7 @@ fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Stat
 
                                     // Expect to slot identifier
                                     match tokens.next().unwrap().kind {
-                                        TokenKind::Identifier(to_slot) => mappings.push(RawMapping { from_slot, to_slot, kind:mapping_kind, shape:shape_name.clone() }),
+                                        TokenKind::Identifier(to_slot) => mappings.push(RawMapping { from_slot, to_slot, kind:mapping_kind, shape:shape.clone() }),
                                         other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("Shape"), loc:format!("shape attachment remap value") }),
                                     }
 
@@ -1076,7 +1194,24 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                     match &token.kind {
                         TokenKind::Identifier(_) => {
                             let shape_expr = parse_shape_expression(tokens)?;
-                            generics.push(shape_expr)
+
+                            // Dependencies
+                            let mut dependencies = Vec::new();
+                            while let Some(token) = tokens.peek() {
+                                match &token.kind {
+                                    TokenKind::Operator(Operator::Colon) => {
+                                        tokens.next();
+                                        let dependency = parse_shape_expression(tokens)?;
+                                        dependencies.push(dependency);
+                                    }
+                                    TokenKind::Comma => {
+                                        tokens.next();
+                                    }
+                                    _ => break
+                                }
+                            }
+                            
+                            generics.push((shape_expr, dependencies));
                         }
                         TokenKind::Comma => { tokens.next(); }
                         TokenKind::Operator(Operator::GT) => { 
@@ -1101,9 +1236,9 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
 
                     match token.kind.clone() {
                         TokenKind::Comma => { tokens.next(); }
-                        TokenKind::Identifier(parent) => {
+                        TokenKind::Identifier(_) => {
+                            let parent = parse_shape_expression(tokens)?;
                             parents.push(parent.clone());
-                            tokens.next();
 
                             // Check for mappings
                             if let TokenKind::LeftParen = tokens.peek().unwrap().kind {

@@ -179,11 +179,74 @@ fn range_create_exclusive(input: IntrinsicParameters) -> Result<Value, RuntimeEr
     }
 }
 
+fn set_to_array(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let set = &input.args[0];
+    match set {
+        Value::Set(vec, kind) => 
+            Ok(Value::Array(vec.clone(), kind.clone())),
+        other => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Set(Box::new(ValueKind::None)) })
+    }
+}
+
+fn set_contains(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let set = &input.args[0];
+    let value = &input.args[1];
+    match set {
+        Value::Set(vec, _) => 
+            Ok(Value::Bool(vec.contains(value))),
+        other => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Set(Box::new(ValueKind::None)) })
+    }
+}
+
+fn dict_get(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let dict = &input.args[0];
+    let key = &input.args[1];
+    match dict {
+        Value::Dict(vec, _, _) => {
+            for (k, val) in vec {
+                if k == key { return Ok(val.clone()) }
+            }
+            Ok(Value::None)
+        }
+        other => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Set(Box::new(ValueKind::None)) })
+    }
+}
+
+fn dict_values(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let dict = &input.args[0];
+    match dict {
+        Value::Dict(vec, _, val_kind) => {
+            Ok(Value::Array(vec.iter().map(|(_,v)|v.clone()).collect(), val_kind.clone()))
+        }
+        other => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Set(Box::new(ValueKind::None)) })
+    }
+}
+
+fn dict_keys(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let dict = &input.args[0];
+    match dict {
+        Value::Dict(vec, key_kind, _) => {
+            Ok(Value::Set(vec.iter().map(|(k,_)|k.clone()).collect(), key_kind.clone()))
+        }
+        other => Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Set(Box::new(ValueKind::None)) })
+    }
+}
+
 pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
     match name.as_str() {
         "Array::Append" => Ok(array_append),
         "Array::Add" => Ok(array_insert),
         "Array::Remove" => Ok(array_remove),
+        "Array::Get" => Ok(todo),
+        "Set::ToArray" => Ok(set_to_array),
+        "Set::Add" => Ok(todo),
+        "Set::Remove" => Ok(todo),
+        "Set::Contains" => Ok(set_contains),
+        "Dict::Keys" => Ok(dict_keys),
+        "Dict::Values" => Ok(dict_values),
+        "Dict::Set" => Ok(todo),
+        "Dict::Remove" => Ok(todo),
+        "Dict::Get" => Ok(dict_get),
         "Sqrt" => Ok(math_sqrt),
         "Args" => Ok(io_args),
         "ReadLine" => Ok(io_readline),
@@ -199,4 +262,9 @@ pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
 
         other => Err(ParseError::Error{span, message:format!("No intrinsic operation defined for {}", other)})
     }
+}
+
+fn todo(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    println!("Thing happened");
+    Ok(Value::None)
 }

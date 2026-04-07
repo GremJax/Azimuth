@@ -42,7 +42,7 @@ pub type Filename = String;
 #[derive(Debug, Clone, Default)]
 pub enum NamespaceKind {
     #[default] Namespace,
-    Shape{parents: Vec<Identifier>, mappings: Vec<RawMapping>, generics: Vec<ShapeExpression>},
+    Shape{parents: Vec<ShapeExpression>, mappings: Vec<RawMapping>, generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>},
     Atlas
 }
 

@@ -92,13 +92,18 @@ namespace Math {
     }
 
     static intrinsic Sqrt(number x) -> number
+
+    static Floor(double x) -> double
+        return x - x%1 + 1
+    static Ceil(double x) -> double
+        return x - x%1
 }
 
 namespace IO {
     static Print(string x) print x
 
     static intrinsic ReadLine() -> string?
-    static intrinsic Args() -> string[]
+    static intrinsic Args() -> [string]
 }
 
 namespace Random {
@@ -121,7 +126,7 @@ shape Error {
 }
 
 shape Executor {
-    Run(|()|[] hooks) {
+    Run([|() -> void|] hooks) {
         for hook in hooks {
             hook()
         }
@@ -140,21 +145,33 @@ shape Identified {
     Id uint64
 }
 
-shape Parent<T> {
-    Children T[]
-
-    Add(T child) {
-        child := Child<T>
-        child::Child.Parent = self
-        //Children.Append(child)
-    }
+shape Versioned {
+    Version uint64
+    
+    IsNewerThan(Versioned other) -> bool
+        return self.Version > other.Version
 }
 
-shape Child<T> {
-    Parent T
+shape Parenting<T : Parenting<T> > {
+    Parent T?
+    Children {T} = {}
 
-    //Root() -> T 
-        //self.Parent::Child<T>?.Parent ?? self
+    SetParent(T parent) {
+        self.Parent?.Children.Remove(self)
+        parent.Children.Add(self)
+        self.Parent = parent
+    }
+
+    RemoveParent() {
+        self.Parent?.Children.Remove(self)
+        //self.Parent = null
+    }
+
+    IsChildOf(T other) -> bool
+        return (self.Parent == other) || (self.Parent?.IsChildOf(other) ?? false)
+
+    Root() -> T 
+        return self.Parent?.Root() ?? self
 }
 
 shape Linked<T> {
@@ -163,31 +180,66 @@ shape Linked<T> {
 
 shape Array<T> {
     Len() -> uint64 return len self
+    //ToArray() -> [T] return self
 
     intrinsic Append(T item) -> bool
-    intrinsic Add(T item, int32 index) -> bool
-    intrinsic Remove(T item, int32 index) -> bool
+    intrinsic Add(T item, uint64 index) -> bool
+    intrinsic Remove(T item, uint64 index) -> bool
+
+    Contains(T item) -> bool {
+        //for i in self
+        //    if i == item return true
+        return false
+    }
 }
 
 shape Range {
-    intrinsic ToArray() -> int[]
+    intrinsic ToArray() -> [int]
 
     intrinsic Create(int start, int end, int by) -> range
     intrinsic CreateExclusive(int start, int end, int by) -> range
 }
 
 shape Set<T> {
-
+    Len() -> uint64 return len self
+    intrinsic ToArray() -> [T]
+    
+    intrinsic Add(T item) -> bool
+    intrinsic Remove(T item) -> bool
+    intrinsic Contains(T item) -> bool
 }
 
 shape Dict<K, V> {
+    Len() -> uint64 return len self
+    
+    intrinsic Keys() -> {K}
+    intrinsic Values() -> [V]
+    
+    intrinsic Set(K key, V value) -> bool
+    intrinsic Remove(K key) -> bool
 
+    intrinsic Get(K key) -> V?
+    GetOr(K key, K default) -> V
+        return self.Get(key) ?? default
+
+    ContainsKey(K key) -> bool 
+        return self.Get(key) != null
+    ContainsValue(V value) -> bool 
+        return self.Values().Contains(value)
+}
+
+shape Pair<K, V> {
+    First K
+    Second V
+
+    Key() -> K return self.First
+    Value() -> V return self.Second
 }
 
 shape Collection<T> {
     abstract Len() -> uint64
     abstract Contains(T item) -> bool
-    abstract ToArray() -> []
+    abstract ToArray() -> [T]
 }
 
 shape Comparable<T> {
@@ -296,6 +348,21 @@ shape Point {
 shape Vector {
     X int
     Y int
+}
+
+shape Observable<T> {
+    Listeners {|T|}  = {}
+    
+    Notify(T value) {
+        for listener in self.Listeners
+            listener(value)
+    }
+    
+    Subscribe(|T| listener)
+        self.Listeners.Add(listener)
+    
+    Unsubscribe(|T| listener)
+        self.Listeners.Remove(listener)
 }
 
 print "standard library loaded"

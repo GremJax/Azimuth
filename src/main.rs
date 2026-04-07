@@ -1,4 +1,4 @@
-use std::{collections::{HashMap}, fs};
+use std::{collections::{HashMap, HashSet}, fs};
 use ordered_float::OrderedFloat;
 
 use crate::{
@@ -24,6 +24,8 @@ pub enum ValueKind {
     Range(NumKind),
     Shape(ShapeInstance),
     Array(Box<ValueKind>),
+    Set(Box<ValueKind>),
+    Dict(Box<ValueKind>, Box<ValueKind>),
     Azimuth(Box<ValueKind>),
     Option(Box<ValueKind>),
     Object(Vec<ValueKind>),
@@ -31,7 +33,7 @@ pub enum ValueKind {
     Pointer(Box<ValueKind>),
     ArrayElement(Box<ValueKind>),
     Function(Box<FunctionSignature>),
-    Generic(GenericId),
+    Generic(GenericId, Vec<ValueKind>),
     Multiple(Vec<ValueKind>),
     #[default] None
 }
@@ -71,6 +73,12 @@ impl ValueKind {
                 }
                 return true
             }
+            ValueKind::Generic(_, shapes) => {
+                for shape in shapes {
+                    if !self.is_assignable_from(shape) { return false }
+                }
+                return true
+            }
             kind => kind
         };
         match self {
@@ -84,9 +92,17 @@ impl ValueKind {
                 ValueKind::Array(other_k) => k.is_assignable_from(*other_k),
                 _ => false,
             },
+            ValueKind::Set(k) => match other {
+                ValueKind::Set(other_k) => k.is_assignable_from(*other_k),
+                _ => false,
+            },
+            ValueKind::Dict(k, v) => match other {
+                ValueKind::Dict(other_k, other_v) => k.is_assignable_from(*other_k) && v.is_assignable_from(*other_v),
+                _ => false,
+            },
             ValueKind::Range(k) => match other {
                 ValueKind::Range(other_k) => ValueKind::Number(*k).is_assignable_from(ValueKind::Number(other_k)),
-                ValueKind::Array(other_k) => ValueKind::Number(*k).is_assignable_from(*other_k),
+                //ValueKind::Array(other_k) => ValueKind::Number(*k).is_assignable_from(*other_k),
                 _ => false,
             },
             ValueKind::Azimuth(k) => match other {
@@ -94,6 +110,12 @@ impl ValueKind {
                 _ => false,
             },
             ValueKind::Object(k) => {
+                for shape in k {
+                    if shape.is_assignable_from(other.clone()) { return true }
+                }
+                false
+            }
+            ValueKind::Generic(_, k) => {
                 for shape in k {
                     if shape.is_assignable_from(other.clone()) { return true }
                 }
@@ -126,7 +148,7 @@ impl ValueKind {
             }
 
             ValueKind::Option(k) => k.is_assignable_from(other),
-            ValueKind::Generic(_) => true,
+            ValueKind::Generic(_,_) => true,
             ValueKind::Multiple(kinds) => kinds.iter().any(|kind| kind.is_assignable_from(other.clone())),
 
             ValueKind::None => other == ValueKind::None,
@@ -332,6 +354,8 @@ pub enum Value {
     String(String),
 
     Array(Vec<Value>, ValueKind),
+    Set(Vec<Value>, ValueKind),
+    Dict(Vec<(Value, Value)>, ValueKind, ValueKind),
     Range(Number, Number, Number, bool, NumKind),
     
     Azimuth(AzimuthState),
@@ -366,6 +390,29 @@ impl Value {
                 string.push(']');
                 string
             }
+            Value::Set(array, _) => {
+                let mut string = String::new();
+                string.push('{');
+                for val in array {
+                    string += &val.to_string();
+                    string.push(',');
+                }
+                string.push('}');
+                string
+            }
+            Value::Dict(array, _, _) => {
+                let mut string = String::new();
+                string.push('{');
+                if array.len() == 0 { string.push(':') }
+                for (key, val) in array {
+                    string += &key.to_string();
+                    string.push(':');
+                    string += &val.to_string();
+                    string.push(',');
+                }
+                string.push('}');
+                string
+            }
             Value::Range(start, end, by, inclusive, _) =>
                 format!("{}{}{}", start.to_string(), if *inclusive { "..." } else { "..<" }, end.to_string()),
             Value::Object(id, shape) =>
@@ -384,6 +431,8 @@ impl Value {
             Value::Bool(_) => ValueKind::Bool,
             Value::String(_) => ValueKind::String,
             Value::Array(_, value_type) => ValueKind::Array(Box::new(value_type.clone())),
+            Value::Set(_, value_type) => ValueKind::Set(Box::new(value_type.clone())),
+            Value::Dict(_, key_type, value_type) => ValueKind::Dict(Box::new(key_type.clone()),Box::new(value_type.clone())),
             Value::Range(_,_,_,_,kind) => ValueKind::Range(kind.clone()),
             Value::Azimuth(s) => ValueKind::Azimuth(Box::new(s.value_type.clone())),
             Value::Object(_, kind) => kind.clone(),
@@ -856,18 +905,6 @@ impl Runtime {
             
             target_az_id = remap_id;
             println!("- Will remap {} -> {} (explicit)", azimuth.name, remap_slot.name);
-        //}
-        // Find default remapping if exists
-        //else if let Some(mapping) = shape.mappings.iter().find(|map| map.to.id == azimuth_id) {
-        //    let remapped_id = mapping.from.id;
-            
-        //    let remapped_slot = self.get_azimuth(remapped_id);
-            //if !generic.clone().unwrap_or(azimuth.value_type.clone()).is_assignable_from_runtime(remapped_slot.value_type.clone(), self) { 
-            //    return Err(RuntimeError::Error{span, message: format!("Type mismatch: {:?} not assignable from {:?}", azimuth.name, remapped_slot.value_type)}); 
-            //}
-
-        //    target_az_id = remapped_id;
-        //    println!("- Will remap {} -> {} (shape default)", azimuth.name, remapped_slot.name);
         } else {
 
             // New slot
@@ -1077,7 +1114,7 @@ impl Runtime {
             let azimuth = self.get_azimuth(az_id).clone();
 
             let generic_type = match azimuth.value_type {
-                ValueKind::Generic(generic) => {
+                ValueKind::Generic(generic,_) => {
                     shape_id.generics.get(generic as usize).cloned()
                 }
                 _ => None,
@@ -1387,6 +1424,8 @@ impl Runtime {
                 ValueKind::Bool => "Bool",
                 ValueKind::String => "String",
                 ValueKind::Array(_) => "Array",
+                ValueKind::Set(_) => "Set",
+                ValueKind::Dict(_,_) => "Dict",
                 ValueKind::Range(_) => "Range",
                 _ => todo!()
             }) {

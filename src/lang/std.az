@@ -219,8 +219,8 @@ shape Dict<K, V> {
     intrinsic Remove(K key) -> bool
 
     intrinsic Get(K key) -> V?
-    GetOr(K key, K default) -> V
-        return self.Get(key) ?? default
+    GetOr(K key, K def) -> V
+        return self.Get(key) ?? def
 
     ContainsKey(K key) -> bool 
         return self.Get(key) != null
@@ -350,8 +350,38 @@ shape Vector {
     Y int
 }
 
+shape MapDictEntry<K, V : MapDictEntry<K,V> > {
+    abstract GetKey() -> K
+}
+
+shape MapDict<K, V : MapDictEntry<K,V> > {
+    Dict {K:V}
+
+    Len() -> uint64 return self.Dict.Len()
+    
+    Keys() -> {K} 
+        return self.Dict.Keys()
+    Values() -> [V] 
+        return self.Dict.Values()
+    
+    Set(MapDictEntry<K,V> value) -> bool 
+        return self.Dict.Set(value.GetKey(), value)
+    Remove(MapDictEntry<K,V> value) -> bool 
+        return self.Dict.Remove(value.GetKey())
+
+    Get(K key) -> V? 
+        return self.Dict.Get(key)
+    GetOr(K key, K def) -> V 
+        return self.Dict.GetOr(key, def)
+
+    ContainsKey(K key) -> bool 
+        return self.Dict.ContainsKey(key)
+    ContainsValue(MapDictEntry<K,V> value) -> bool 
+        return self.Dict.ContainsKey(value.GetKey())
+}
+
 shape Observable<T> {
-    Listeners {|T|}  = {}
+    Listeners {|T|} = {}
     
     Notify(T value) {
         for listener in self.Listeners

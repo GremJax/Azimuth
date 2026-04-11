@@ -78,8 +78,9 @@ pub enum Keyword {
     // Definitions
     Shape, Let, Enum, Extension,
     Static, Seal, Locked, Const, Abstract, Intrinsic,
-    Before, After, Next,
-    PSelf, Attach, Detach,
+    Before, After, Next, 
+    PSelf, Default, Underscore,
+    Attach, Detach,
 
     // Statements
     If, Else, Switch,
@@ -418,6 +419,8 @@ impl Lexer {
                     "const" => TokenKind::Keyword(Keyword::Const),
                     "before" => TokenKind::Keyword(Keyword::Before),
                     "after" => TokenKind::Keyword(Keyword::After),
+                    "default" => TokenKind::Keyword(Keyword::Default),
+                    "_" => TokenKind::Keyword(Keyword::Underscore),
                     "if" => TokenKind::Keyword(Keyword::If),
                     "else" => TokenKind::Keyword(Keyword::Else),
                     "switch" => TokenKind::Keyword(Keyword::Switch),

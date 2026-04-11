@@ -64,6 +64,7 @@ enum Presence {
 #[derive(Debug, Clone)]
 pub enum Expression {
     Value(Span, Value),
+    Default(Span),
     StringFormat(Span, Vec<Expression>),
     Array(Span, Vec<Expression>, Option<ValueKind>),
     Set(Span, Vec<Expression>, Option<ValueKind>),
@@ -132,7 +133,7 @@ pub enum FunctionBody {
 #[derive(Debug, Clone)]
 pub struct RawFunctionParam {
     pub value_type: ShapeExpression,
-    pub identifier: Identifier
+    pub identifier: Option<Identifier>
 }
 
 #[derive(Debug, Clone)]
@@ -332,6 +333,7 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
         TokenKind::Bool(b) => Expression::Value(span, b.into()),
         TokenKind::String(s) => Expression::Value(span, s.into()),
         TokenKind::NoneValue => Expression::Value(span, Value::None),
+        TokenKind::Keyword(Keyword::Default) => Expression::Default(span),
 
         // Lambda
         TokenKind::Operator(Operator::BWOr) => parse_lambda(span, tokens)?,
@@ -709,7 +711,7 @@ fn parse_function(shape: Option<ShapeExpression>, intrinsic_name:Option<String>,
     let has_self = match shape {
         Some(shape) => {
             // Add self param
-            let self_param = RawFunctionParam{value_type: shape, identifier:format!("self")};
+            let self_param = RawFunctionParam{value_type: shape, identifier:Some(format!("self"))};
             input_types.push(self_param);
 
             true
@@ -739,7 +741,8 @@ fn parse_function(shape: Option<ShapeExpression>, intrinsic_name:Option<String>,
             _ => { 
                 let value_type = parse_shape_expression(tokens)?;
                 let identifier = match tokens.next().unwrap().kind {
-                    TokenKind::Identifier(k) => k,
+                    TokenKind::Identifier(k) => Some(k),
+                    TokenKind::Keyword(Keyword::Underscore) => None,
                     token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("function parameter definition") }),
                 };
                 input_types.push(RawFunctionParam{value_type, identifier});
@@ -829,7 +832,8 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
                         let value_type = parse_shape_expression(tokens)?;
                         let token = tokens.next().unwrap();
                         let identifier = match token.kind {
-                            TokenKind::Identifier(l) => l,
+                            TokenKind::Identifier(l) => Some(l),
+                            TokenKind::Keyword(Keyword::Underscore) => None,
                             other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("parameter name"), loc:format!("lymphnoid parameters") })
                         };
                         params.push(RawFunctionParam { value_type, identifier });
@@ -841,7 +845,8 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
             let value_type = parse_shape_expression(tokens)?;
             let token = tokens.next().unwrap();
             let identifier = match token.kind {
-                TokenKind::Identifier(l) => l,
+                TokenKind::Identifier(l) => Some(l),
+                TokenKind::Keyword(Keyword::Underscore) => None,
                 other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("parameter name"), loc:format!("lymphnoid parameters") })
             };
             params.push(RawFunctionParam { value_type, identifier });
@@ -1275,6 +1280,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                                                 token => return Err(ParseError::IncorrectToken { span, token, expected:format!("Slot"), loc:format!("shape inheritance remap value") }),
                                             }
                                         },
+                                        TokenKind::Comma => {},
                                         TokenKind::RightParen => break,
                                         token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("shape inheritance remap") }),
                                     }

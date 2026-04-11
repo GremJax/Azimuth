@@ -211,3 +211,14 @@ print dict
 
 print {}
 print {:}
+
+static DoAThing(|(int, int) -> int| numFunc) {
+    print "NumFunc: \{numFunc(5, 2)}"
+}
+
+let numFunc = |(int _, int _) -> int {return 5}|
+
+static DoSum(int x, int y) -> int return x + y
+
+DoAThing(DoSum)
+DoAThing(numFunc)

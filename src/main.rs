@@ -48,7 +48,7 @@ impl ValueKind {
                 match shape {
                     Some(info) => {
                         for parent in &info.parent_ids {
-                            let parent_inst = ShapeInstance{id:*parent, generics:inst.generics.clone()};
+                            let parent_inst = ShapeInstance{id:parent.id, generics:inst.generics.clone()};
                             println!("Checking shape {:?} against {:?}", parent_inst, other_raw);
                             if ValueKind::Shape(parent_inst.clone()).is_assignable_from(other_raw.clone()) { return true }
                         }
@@ -544,7 +544,7 @@ pub struct Function {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FunctionParameter {
     pub kind: ValueKind,
-    pub local: LocalId,
+    pub local: Option<LocalId>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -1137,7 +1137,7 @@ impl Runtime {
         
         for parent in parents{
             println!("Attaching inheritance: {:?}", parent);
-            self.attach_shape_with_remap(span.clone(), object_id, ShapeInstance{ id:parent, generics:shape_id.generics.clone() }, remap.clone())?;
+            self.attach_shape_with_remap(span.clone(), object_id, ShapeInstance{ id:parent.id, generics:shape_id.generics.clone() }, remap.clone())?;
         }
 
         Ok(())

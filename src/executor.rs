@@ -135,6 +135,59 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                 None => Err(RuntimeError::Error{span, message: format!("Missing local: {:?}", k)})
             }
         }
+
+        ResolvedExpression::Default(span, kind, info) => {
+            let value = match kind {
+                // Primitives
+                ValueKind::String => format!("").into(),
+                ValueKind::Bool => false.into(),
+                ValueKind::None => Value::None,
+                ValueKind::Number(NumKind::Int8) => 0i8.into(),
+                ValueKind::Number(NumKind::Int16) => 0i16.into(),
+                ValueKind::Number(NumKind::Int32) => 0i32.into(),
+                ValueKind::Number(NumKind::Int64) => 0i64.into(),
+                ValueKind::Number(NumKind::UInt8) => 0u8.into(),
+                ValueKind::Number(NumKind::UInt16) => 0u16.into(),
+                ValueKind::Number(NumKind::UInt32) => 0u32.into(),
+                ValueKind::Number(NumKind::UInt64) => 0u64.into(),
+                ValueKind::Number(NumKind::Float32) => 0f32.into(),
+                ValueKind::Number(NumKind::Float64) => 0f64.into(),
+
+                // Collections
+                ValueKind::Array(kind) => Value::Array([].into(), *kind),
+                ValueKind::Set(kind) => Value::Set([].into(), *kind),
+                ValueKind::Dict(key_kind, value_kind) => Value::Dict([].into(), *key_kind, *value_kind),
+
+                // Other
+                ValueKind::Option(_) => Value::None,
+                
+                // Object
+                ValueKind::Object(kinds) => {
+                    let info = info.unwrap();
+                    let statement = ResolvedStatement::DeclareObject { span:span.clone(), 
+                        local: 0, 
+                        info: info.clone(), 
+                        shape: ResolvedShapeExpression::Primitive(span, ValueKind::Object(kinds.clone()))
+                    };
+                    execute_statement(runtime, statement)?;
+                    Value::Object(info.id, ValueKind::Object(kinds))
+                }
+                ValueKind::Shape(inst) => {
+                    let info = info.unwrap();
+                    let statement = ResolvedStatement::DeclareObject { span:span.clone(), 
+                        local: 0, 
+                        info: info.clone(), 
+                        shape: ResolvedShapeExpression::Primitive(span, ValueKind::Shape(inst.clone()))
+                    };
+                    execute_statement(runtime, statement)?;
+                    Value::Object(info.id, ValueKind::Shape(inst))
+                }
+
+                other => return Err(RuntimeError::Error{span, message:format!("Could not determine default for {:?}", other)})
+            };
+
+            Ok(value)
+        }
         
         ResolvedExpression::StringFormat(span, expressions) => {
             let mut string = String::new();
@@ -445,7 +498,11 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                         let param = params.get(i).unwrap();
                         let local = func.input_types.get(i).unwrap().local;
                         
-                        runtime.reserve_local(local, param.clone());
+                        match local {
+                            Some(id) => runtime.reserve_local(id, param.clone()),
+                            None => {}
+                        }
+                       
                     }
                     for capture in &func.captures {
                         runtime.ref_local(*capture, 0);
@@ -467,7 +524,10 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
 
                             // Free locals
                             for param in func.input_types {
-                                runtime.deref_local(param.local, 3);
+                                match param.local {
+                                    Some(id) => runtime.deref_local(id, 3),
+                                    None => {}
+                                }
                             }
                             for capture in &func.captures {
                                 runtime.deref_local(*capture, 0);
@@ -485,7 +545,10 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
 
                             // Free locals
                             for param in func.input_types {
-                                runtime.deref_local(param.local, 4);
+                                match param.local {
+                                    Some(id) => runtime.deref_local(id, 4),
+                                    None => {}
+                                }
                             }
                             
                             // Remove from stack
@@ -647,7 +710,7 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                     match shape {
                         Some(info) => {
                             for parent in &info.parent_ids {
-                                let parent_inst = ShapeInstance{id:*parent, generics:inst.generics.clone()};
+                                let parent_inst = ShapeInstance{id:parent.id, generics:parent.generics.clone()};
                                 known_shapes.push(ValueKind::Shape(parent_inst));
                             }
                             let mut mapping = Vec::new();
@@ -695,8 +758,13 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         },
 
         ResolvedStatement::Attach { span, object, shape, mappings } => {
-            match (evaluate(runtime, object)?, evaluate_shape(runtime, shape)) {
-                (Value::Object(object_id, _), ValueKind::Shape(shape_inst)) => {
+            match evaluate(runtime, object)? {
+                Value::Object(object_id, _) => {
+                    let shape_inst = match evaluate_shape(runtime, shape) {
+                        ValueKind::Shape(inst) => inst,
+                        shape => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to object:{:?}", shape, object_id)})
+                    };
+
                     let sealed = runtime.get_object(object_id).flags.sealed;
                     if sealed { return Ok(ExecFlow::Normal(span)) }
                     
@@ -718,7 +786,7 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
 
                     runtime.attach_shape_with_remap(span.clone(), object_id, shape_inst.clone(), remap)?;
                 },
-                (object, shape) => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to {:?}", shape, object)})
+                object => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to {:?}", shape, object)})
             }
             Ok(ExecFlow::Normal(span))
         },

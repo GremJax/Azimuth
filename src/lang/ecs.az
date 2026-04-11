@@ -8,3 +8,43 @@ shape Entity : Named, Identified, Parenting<Entity> {
     Setup() {}
 }
 
+shape Vec3 {
+    X double = 0
+    Y double = 0
+    Z double = 0
+}
+shape Scale {
+    Scale Vec3 = default
+}
+shape Position {
+    Position Vec3 = default
+}
+shape Rotation {
+    Rotation Vec3 = default
+}
+
+shape Transform : Scale, Position, Rotation {}
+
+shape MeshPoint : Position {
+    U double = 0
+    V double = 0
+}
+
+shape Mesh {
+    Points {MeshPoint} = {}
+}
+
+let obj := Transform
+print obj
+print obj.Scale
+
+let obj2 := Transform
+print obj2
+obj.Scale.X = 5
+obj2.Scale.X = 6
+
+print obj.Scale
+print obj2.Scale
+
+//obj := Entity
+//print obj

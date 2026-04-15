@@ -229,8 +229,7 @@ pub enum Statement {
         span: Span, 
         name: Identifier, 
         slot_ids: Vec<RawAzimuth>,
-        parents: Vec<ShapeExpression>,
-        mappings: Vec<RawMapping>,
+        parents: Vec<RawAttachment>,
         generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>,
         extension: bool,
     },
@@ -342,6 +341,7 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
         TokenKind::String(s) => Expression::Value(span, s.into()),
         TokenKind::NoneValue => Expression::Value(span, Value::None),
         TokenKind::Keyword(Keyword::Default) => Expression::Default(span),
+        TokenKind::Keyword(Keyword::New) => Expression::ObjectInit(span, parse_attachment(tokens)?),
 
         // Lambda
         TokenKind::Operator(Operator::BWOr) => parse_lambda(span, tokens)?,
@@ -1246,7 +1246,6 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
             }
             
             // Establish inheritance
-            let mut mappings = Vec::new();
             let mut parents = Vec::new();
             
             let token = tokens.peek().unwrap();
@@ -1259,50 +1258,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                     match token.kind.clone() {
                         TokenKind::Comma => { tokens.next(); }
                         TokenKind::Identifier(_) => {
-                            let parent = parse_shape_expression(tokens)?;
-                            parents.push(parent.clone());
-
-                            // Check for mappings
-                            if let TokenKind::LeftParen = tokens.peek().unwrap().kind {
-                                tokens.next(); // consume '{'
-
-                                while let Some(token) = tokens.next() {
-                                    match token.kind {
-                                        // From slot mapping
-                                        TokenKind::Identifier(from_slot) => {
-
-                                            // Expect '->' operator
-                                            let token = tokens.next().unwrap();
-                                            if !matches!(token.kind, TokenKind::Operator(Operator::Arrow)) {
-                                                return Err(ParseError::IncorrectToken { span, token:token.kind, expected:format!("->"), loc:format!("shape inheritance remap value") })
-                                            }
-
-                                            // Check for before/after keywords
-                                            let mut mapping_kind = MappingKind::Strict;
-                                            match tokens.peek().unwrap().kind {
-                                                TokenKind::Keyword(Keyword::Before) => {
-                                                    tokens.next();
-                                                    mapping_kind = MappingKind::Before
-                                                }
-                                                TokenKind::Keyword(Keyword::After) => {
-                                                    tokens.next();
-                                                    mapping_kind = MappingKind::After
-                                                }
-                                                _ => {}
-                                            }
-                                            
-                                            // Expect to slot identifier
-                                            match tokens.next().unwrap().kind {
-                                                TokenKind::Identifier(to_slot) => mappings.push(RawMapping { from_slot, to_slot, kind:mapping_kind, shape:parent.clone() }),
-                                                token => return Err(ParseError::IncorrectToken { span, token, expected:format!("Slot"), loc:format!("shape inheritance remap value") }),
-                                            }
-                                        },
-                                        TokenKind::Comma => {},
-                                        TokenKind::RightParen => break,
-                                        token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("shape inheritance remap") }),
-                                    }
-                                }
-                            }
+                            parents.push(parse_attachment(tokens)?);
                         },
                         _ => break,
                     }
@@ -1330,7 +1286,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                 return Err(ParseError::IncorrectToken{span, token:token.kind, expected:format!("{{"), loc:format!("shape declaration")});
             }
 
-            Ok(Statement::DeclareShape { span, name: shape_identifier, slot_ids, parents, mappings, generics, extension })
+            Ok(Statement::DeclareShape { span, name: shape_identifier, slot_ids, parents, generics, extension })
         },
 
         // Azimuth declaration within namespace

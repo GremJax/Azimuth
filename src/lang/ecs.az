@@ -2,26 +2,30 @@ using std
 
 static Entities {ulong:Entity} = {:}
 
-static IdCounter = 0
+static IdCounter int = 0
 static NextId() -> int {
     IdCounter += 1
     return IdCounter - 1
 }
 
-shape Entity : Named, Identified(Id = NextId()), Parenting<Entity> {
+shape Entity : Named, Identified, Parenting<Entity> {
+
+    //attach() {
+    //    self.Id = NextId()
+    //}
+
     Tick() {}
     Load() {}
     Setup() {}
 }
 
-shape Vec3 {    // : Cloneable<Vec3>(Clone -> Clone) {
+shape Vec3 : Cloneable<Vec3>(Clone -> Clone) {
     X double = 0
     Y double = 0
     Z double = 0
 
     Clone() -> Vec3 {
-        let clone := Vec3(X=self.X, Y=self.Y, Z=self.Z)
-        return clone
+        return new Vec3(X=self.X, Y=self.Y, Z=self.Z)
     }
 }
 shape Scale {
@@ -59,3 +63,17 @@ print obj2.Scale
 
 obj := Entity
 print obj
+
+let binkus = obj.Position.Clone()
+obj.Position.X = 100
+
+print obj.Position
+print binkus
+
+let nameThing = "Hello"
+switch nameThing {
+    "Hi"    -> print "KYS"
+    "Hello" continue -> print "OHE"
+    "AEFE"  -> print "AAAA"
+    else    -> print "EE"
+}

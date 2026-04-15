@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, analyzer::CompileError, lexer::{self, Span}, parser::{self, Expression, Identifier, ParseError, ParsedAtlas, RawMapping, ShapeExpression, Statement}};
+use crate::{AzimuthFlags, analyzer::CompileError, lexer::{self, Span}, parser::{self, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
 
 #[derive(Debug, Clone)]
 pub enum LoadError {
@@ -42,7 +42,7 @@ pub type Filename = String;
 #[derive(Debug, Clone, Default)]
 pub enum NamespaceKind {
     #[default] Namespace,
-    Shape{parents: Vec<ShapeExpression>, mappings: Vec<RawMapping>, generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>},
+    Shape{parents: Vec<RawAttachment>, generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>},
     Atlas
 }
 
@@ -197,7 +197,7 @@ impl Loader {
                     let name = format!("{}::{}", self.namespaces.get(0).unwrap().name, package);
                     dependencies.push(name);
                 }
-                Statement::DeclareShape { span, name, slot_ids, parents, mappings, generics, extension, .. } => {
+                Statement::DeclareShape { span, name, slot_ids, parents, generics, extension, .. } => {
                     let name = format!("{}::{}", identifier, name);
                     let azimuths: Vec<LoadedAzimuth> = slot_ids.iter()
                         .map(|raw| LoadedAzimuth{
@@ -211,7 +211,7 @@ impl Loader {
                         span,
                         name:name.clone(),
                         id: self.next_namespace_id(), 
-                        kind:NamespaceKind::Shape{ parents, mappings, generics}, 
+                        kind:NamespaceKind::Shape{ parents, generics}, 
                         children:Vec::new(), 
                         dependencies:dependencies.clone(),
                         azimuths 
@@ -399,8 +399,8 @@ impl Loader {
             found[0].name.clone()
         };
 
-        let (ext_parents, ext_mappings, ext_generics) = match &mut extension.kind {
-            NamespaceKind::Shape { parents, mappings, generics } => (parents, mappings, generics),
+        let (ext_parents, ext_generics) = match &mut extension.kind {
+            NamespaceKind::Shape { parents, generics } => (parents, generics),
             _ => unreachable!(),
         };
         
@@ -410,9 +410,8 @@ impl Loader {
         };
         
         match &mut base.kind {
-            NamespaceKind::Shape{ parents, mappings, generics } => {
+            NamespaceKind::Shape{ parents, generics } => {
                 parents.append(ext_parents);
-                mappings.append(ext_mappings);
                 generics.append(ext_generics);
                 base.azimuths.append(&mut extension.azimuths);
                 base.children.append(&mut extension.children);

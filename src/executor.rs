@@ -167,8 +167,8 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     let expr = ResolvedExpression::ObjectInit(span.clone(), ResolvedAttachment{
                         defaults:Vec::new(), 
                         mappings:Vec::new(), 
-                        base:todo!(),
-                        shapes:kinds,
+                        base:OBJECT_INSTANCE,
+                        known:kinds,
                     });
                     evaluate(runtime, expr)?
                 }
@@ -176,8 +176,8 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     let expr = ResolvedExpression::ObjectInit(span.clone(), ResolvedAttachment{
                         defaults:Vec::new(), 
                         mappings:Vec::new(), 
-                        base:todo!(),
-                        shapes:[ValueKind::Shape(inst)].to_vec(),
+                        base:inst.clone(),
+                        known:[ValueKind::Shape(inst)].to_vec(),
                     });
                     evaluate(runtime, expr)?
                 }
@@ -210,27 +210,18 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
             let name = format!("Obj{}", runtime.next_object_id);
             let id = runtime.create_object(name);
 
-            let shape = evaluate_shape(runtime, attachment.base);
-            let mut known_shapes = [shape.clone()].to_vec();
+            let known = ValueKind::Shape(attachment.base.clone());
+            let mut known_shapes = [known].to_vec();
+
+            let shape = runtime.get_shape(attachment.base.id);
             match shape {
-                ValueKind::Shape(inst) => {
-                    let shape = runtime.get_shape(inst.id);
-                    match shape {
-                        Some(info) => {
-                            for parent in &info.parent_ids {
-                                let parent_inst = ShapeInstance{id:parent.id, generics:parent.generics.clone()};
-                                known_shapes.push(ValueKind::Shape(parent_inst));
-                            }
-                            let mut mapping = Vec::new();
-                            for map in &info.mappings {
-                                mapping.push(Mapping{from:map.from.id, to:map.to.id, kind:map.kind.clone()})
-                            }
-                            runtime.attach_shape_with_remap(span.clone(), id, inst.clone(), mapping)?;
-                        }
-                        None => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
+                Some(info) => {
+                    for parent in &info.parents {
+                        known_shapes.push(ValueKind::Shape(parent.base.clone()));
                     }
+                    runtime.attach_shape(span.clone(), id, attachment)?;
                 }
-                _ => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
+                None => return Err(RuntimeError::Error{span, message:format!("Shape not found: {:?}", attachment.base)})
             }
 
             let kind = ValueKind::Object(known_shapes);
@@ -496,7 +487,10 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     for mapping in azimuths {
                         let found = match mapping {
                             MappingTo::Slot(id) => {
-                                let object = runtime.get_object(object_id);
+                                let object = match runtime.get_object(object_id) {
+                                    Some(obj) => obj,
+                                    None => panic!("OBJNOTFOUND 1")
+                                };
                                 if let Some(state) = object.get_slot_state(id) {
                                     Some(state.storage.clone())
                                 } else {
@@ -567,8 +561,16 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     match execute_statement(runtime, statement.clone())? {
                         ExecFlow::Error { span, message } => Err(RuntimeError::Throw { span, message }),
                         ExecFlow::Return(span, value) => {
-                            if value.kind() != expected_return {
+                            if !value.kind().is_assignable_from(expected_return.clone()) {
                                 return Err(RuntimeError::TypeMismatch { span, found: value, expected: expected_return });
+                            }
+
+                            // Save Object
+                            match value {
+                                Value::Object(id, _) => {
+                                    runtime.ref_obj(id);
+                                }
+                                _ => {}
                             }
 
                             // Free locals
@@ -749,7 +751,11 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::Detach { span, object, shape } => {
             match (evaluate(runtime, object)?, evaluate_shape(runtime, shape)) {
                 (Value::Object(object_id, _), ValueKind::Shape(shape_inst)) => {
-                    let sealed = runtime.get_object(object_id).flags.sealed;
+                    let object = match runtime.get_object(object_id) {
+                        Some(obj) => obj,
+                        None => panic!("OBJNOTFOUND 3")
+                    };
+                    let sealed = object.flags.sealed;
                     if !sealed {
                         runtime.detach_shape(span.clone(), object_id, shape_inst)?
                     }
@@ -762,7 +768,11 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::AddMapping { span, object, mapping } => {
             match evaluate(runtime, object)? {
                 Value::Object(object_id, _) => {
-                        let sealed = runtime.get_object(object_id).flags.sealed;
+                        let object = match runtime.get_object(object_id) {
+                            Some(obj) => obj,
+                            None => panic!("OBJNOTFOUND 3")
+                        };
+                        let sealed = object.flags.sealed;
                         if !sealed {
                             runtime.remap_slot(span.clone(), object_id, mapping.to.id, mapping.from.id)?
                         }
@@ -775,31 +785,14 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::Attach { span, object, attachment } => {
             match evaluate(runtime, object)? {
                 Value::Object(object_id, _) => {
-                    let shape_inst = match evaluate_shape(runtime, attachment.base) {
-                        ValueKind::Shape(inst) => inst,
-                        shape => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to object:{:?}", shape, object_id)})
+                    let object = match runtime.get_object(object_id) {
+                        Some(obj) => obj,
+                        None => panic!("OBJNOTFOUND 2")
                     };
-
-                    let sealed = runtime.get_object(object_id).flags.sealed;
+                    let sealed = object.flags.sealed;
                     if sealed { return Ok(ExecFlow::Normal(span)) }
-                    
-                    let mut remap = Vec::new();
-                    for mapping in attachment.mappings {
-                        remap.push(Mapping{from: mapping.from.id, to:mapping.to.id, kind:mapping.kind});
-                    }
 
-                    let shape = runtime.get_shape(shape_inst.id);
-                    println!("Shape: {:?}", shape);
-                    match shape {
-                        Some(info) => {
-                            for mapping in &info.mappings {
-                                remap.push(Mapping{from: mapping.from.id, to:mapping.to.id, kind:mapping.kind.clone()});
-                            }
-                        }
-                        None => panic!("help")
-                    }
-
-                    runtime.attach_shape_with_remap(span.clone(), object_id, shape_inst.clone(), remap)?;
+                    runtime.attach_shape(span.clone(), object_id, attachment)?;
                 },
                 object => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to {:?}", attachment.base, object)})
             }
@@ -854,6 +847,8 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::Switch { span, target, branch_statements, else_statement } => {
             let target = evaluate(runtime, target)?;
 
+            let mut fell_thru = false;
+
             for (expr, cont, statement) in branch_statements {
                 let comparison = evaluate(runtime, expr)?;
                 if target != comparison { continue }
@@ -861,8 +856,12 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                 let branch_result = execute_statement(runtime, statement)?;
 
                 match branch_result {
-                    ExecFlow::Normal(_) if cont => continue,
+                    ExecFlow::Normal(_) if cont => {
+                        fell_thru = true;
+                        continue
+                    }
                     ExecFlow::Declare(_, loc) if cont => {
+                        fell_thru = true;
                         runtime.deref_local(loc, 52);
                         continue
                     }
@@ -871,8 +870,8 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
             }
 
             match else_statement {
-                None => Ok(ExecFlow::Normal(span)),
-                Some(statement) => execute_statement(runtime, *statement)
+                Some(statement) if !fell_thru => execute_statement(runtime, *statement),
+                _ => Ok(ExecFlow::Normal(span)),
             }
         }
 
@@ -935,9 +934,8 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                     };
                     Box::new(range.map(|n| Value::Number(Number::Int32(n))))
                 },
-                other => return Err(RuntimeError::TypeMismatch { 
-                    span, found: other, 
-                    expected: ValueKind::Array(Box::new(ValueKind::None)) 
+                other => return Err(RuntimeError::Error { span,
+                    message: format!("{:?} is not iterable", other)
                 }),
             };
 

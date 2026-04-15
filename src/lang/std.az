@@ -118,7 +118,7 @@ namespace Random {
 }
 
 shape Error {
-    Message string
+    Message string = default
     Throw() throw self.Message
 
     static Try(|() -> Object| func) -> bool

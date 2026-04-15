@@ -8,19 +8,24 @@ shape Entity : Named, Identified, Parenting<Entity> {
     Setup() {}
 }
 
-shape Vec3 {
+shape Vec3 {    // : Cloneable<Vec3>(Clone -> Clone) {
     X double = 0
     Y double = 0
     Z double = 0
+
+    Clone() -> Vec3 {
+        let clone := Vec3(X=self.X, Y=self.Y, Z=self.Z)
+        return clone
+    }
 }
 shape Scale {
-    Scale Vec3 = default
+    Scale Vec3 := Vec3(X=1,Y=1,Z=1)
 }
 shape Position {
-    Position Vec3 = default
+    Position Vec3 := Vec3(X=1,Y=1,Z=1)
 }
 shape Rotation {
-    Rotation Vec3 = default
+    Rotation Vec3 := Vec3(X=1,Y=1,Z=1)
 }
 
 shape Transform : Scale, Position, Rotation {}

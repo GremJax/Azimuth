@@ -428,6 +428,6 @@ impl Loader {
 pub fn load(source_dir: &str, atlas_path: &str) -> Result<Loader, LoadError> {
     let mut loader = Loader::new(source_dir);
     loader.load_program(atlas_path)?;
-    println!("\nLoaded namespaces: {:?}\n", loader.namespaces);
+    //println!("\nLoaded namespaces: {:?}\n", loader.namespaces);
     Ok(loader)
 }

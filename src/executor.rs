@@ -1,5 +1,6 @@
-use crate::analyzer::{Analyzer, LocalId, ObjectInfo, ResolvedFunctionBody};
+use crate::analyzer::{Analyzer, LocalId, ObjectInfo, ResolvedAttachment, ResolvedFunctionBody, StaticInfo};
 use crate::intrinsic::IntrinsicParameters;
+use crate::parser::Identifier;
 use crate::{AzimuthId, CallStackFunction, Function, FunctionParameter, MappingTo, NumKind};
 use crate::lexer::{Operator, Span};
 use crate::{
@@ -127,7 +128,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
             }
             Ok(Value::Dict(values.iter().map(|(k,v)| (k.clone(),v.clone())).collect(), key_kind, value_kind))
         },
-        ResolvedExpression::Variable(_, Symbol::Object(k)) => Ok(Value::Object(k.id, ValueKind::Shape(OBJECT_INSTANCE))),
+        ResolvedExpression::Variable(span, Symbol::Generic(k)) => return Err(RuntimeError::Error{span, message:format!("Somehow generic made it through: {:?}", k)}),
         ResolvedExpression::Variable(span, Symbol::Local(k)) => { 
             //println!("{:?}, toget: {}", runtime.locals, k.id);
             match runtime.get_local(k.id) {
@@ -136,7 +137,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
             }
         }
 
-        ResolvedExpression::Default(span, kind, info) => {
+        ResolvedExpression::Default(span, kind) => {
             let value = match kind {
                 // Primitives
                 ValueKind::String => format!("").into(),
@@ -163,30 +164,79 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                 
                 // Object
                 ValueKind::Object(kinds) => {
-                    let info = info.unwrap();
-                    let statement = ResolvedStatement::DeclareObject { span:span.clone(), 
-                        local: 0, 
-                        info: info.clone(), 
-                        shape: ResolvedShapeExpression::Primitive(span, ValueKind::Object(kinds.clone()))
-                    };
-                    execute_statement(runtime, statement)?;
-                    Value::Object(info.id, ValueKind::Object(kinds))
+                    let expr = ResolvedExpression::ObjectInit(span.clone(), ResolvedAttachment{
+                        defaults:Vec::new(), 
+                        mappings:Vec::new(), 
+                        base:todo!(),
+                        shapes:kinds,
+                    });
+                    evaluate(runtime, expr)?
                 }
                 ValueKind::Shape(inst) => {
-                    let info = info.unwrap();
-                    let statement = ResolvedStatement::DeclareObject { span:span.clone(), 
-                        local: 0, 
-                        info: info.clone(), 
-                        shape: ResolvedShapeExpression::Primitive(span, ValueKind::Shape(inst.clone()))
-                    };
-                    execute_statement(runtime, statement)?;
-                    Value::Object(info.id, ValueKind::Shape(inst))
+                    let expr = ResolvedExpression::ObjectInit(span.clone(), ResolvedAttachment{
+                        defaults:Vec::new(), 
+                        mappings:Vec::new(), 
+                        base:todo!(),
+                        shapes:[ValueKind::Shape(inst)].to_vec(),
+                    });
+                    evaluate(runtime, expr)?
                 }
 
                 other => return Err(RuntimeError::Error{span, message:format!("Could not determine default for {:?}", other)})
             };
 
             Ok(value)
+        }
+
+        ResolvedExpression::StaticSingleton(span, info) => {
+            let shape = match runtime.get_shape(info) {
+                None => return Err(RuntimeError::Error{span, message:format!("No shape found for static id: {:?}", info)}),
+                Some(info) => info,
+            };
+
+            let static_info = match &shape.static_id {
+                None => return Err(RuntimeError::Error{span, message:format!("{:?} does not have static singleton", shape.name)}),
+                Some(id) => id
+            };
+
+            Ok(Value::Object(static_info.id, ValueKind::Object([].to_vec())))
+        },
+        
+        ResolvedExpression::Option(span,_) => todo!(),
+        ResolvedExpression::Shape(span,_) => todo!(),
+        ResolvedExpression::Reflection(span,_) => todo!(),
+
+        ResolvedExpression::ObjectInit(span, attachment) => {
+            let name = format!("Obj{}", runtime.next_object_id);
+            let id = runtime.create_object(name);
+
+            let shape = evaluate_shape(runtime, attachment.base);
+            let mut known_shapes = [shape.clone()].to_vec();
+            match shape {
+                ValueKind::Shape(inst) => {
+                    let shape = runtime.get_shape(inst.id);
+                    match shape {
+                        Some(info) => {
+                            for parent in &info.parent_ids {
+                                let parent_inst = ShapeInstance{id:parent.id, generics:parent.generics.clone()};
+                                known_shapes.push(ValueKind::Shape(parent_inst));
+                            }
+                            let mut mapping = Vec::new();
+                            for map in &info.mappings {
+                                mapping.push(Mapping{from:map.from.id, to:map.to.id, kind:map.kind.clone()})
+                            }
+                            runtime.attach_shape_with_remap(span.clone(), id, inst.clone(), mapping)?;
+                        }
+                        None => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
+                    }
+                }
+                _ => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
+            }
+
+            let kind = ValueKind::Object(known_shapes);
+            let object = Value::Object(id, kind);
+
+            Ok(object)
         }
         
         ResolvedExpression::StringFormat(span, expressions) => {
@@ -463,9 +513,8 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                                 Some(Value::FunctionChain(azimuths.clone(), kind.clone()))
                             }
                             MappingTo::Expression(expr) => {
-                                //let result = executor::evaluate_place(self, expr);
-                                //return Some(&result.unwrap())
-                                todo!()
+                                let result = evaluate_place(runtime, expr)?;
+                                Some(result)
                             }
                         };
 
@@ -589,7 +638,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
             Ok(Value::Function(Box::new(function)))
         }
 
-        other => panic!("Invalid expression: {:?}", other)
+        //other => panic!("Invalid expression: {:?}", other)
     }
 }
 
@@ -635,7 +684,7 @@ pub fn create_range(from: i32, to: i32, inclusive: bool) -> Value {
     Value::Range(Number::Int32(from), Number::Int32(to), Number::Int32(by), inclusive, NumKind::Int32)
 }
 
-pub fn execute(runtime: &mut Runtime, ast: Vec<ResolvedStatement>, static_info: HashMap<u32, (ObjectInfo, Vec<AzimuthId>)>) -> Result<ExecFlow, RuntimeError> {
+pub fn execute(runtime: &mut Runtime, ast: Vec<ResolvedStatement>, static_info: HashMap<ShapeId, (StaticInfo, Vec<AzimuthId>)>) -> Result<ExecFlow, RuntimeError> {
     runtime.init_static_instances(static_info)?;
 
     for statement in ast {
@@ -697,40 +746,6 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
             Ok(ExecFlow::Declare(span, id))
         },
 
-        ResolvedStatement::DeclareObject { span, local, info, shape } => {
-            let id = info.id.clone();
-
-            runtime.create_object(info);
-
-            let shape = evaluate_shape(runtime, shape);
-            let mut known_shapes = [shape.clone()].to_vec();
-            match shape {
-                ValueKind::Shape(inst) => {
-                    let shape = runtime.get_shape(inst.id);
-                    match shape {
-                        Some(info) => {
-                            for parent in &info.parent_ids {
-                                let parent_inst = ShapeInstance{id:parent.id, generics:parent.generics.clone()};
-                                known_shapes.push(ValueKind::Shape(parent_inst));
-                            }
-                            let mut mapping = Vec::new();
-                            for map in &info.mappings {
-                                mapping.push(Mapping{from:map.from.id, to:map.to.id, kind:map.kind.clone()})
-                            }
-                            runtime.attach_shape_with_remap(span.clone(), id, inst.clone(), mapping)?;
-                        }
-                        None => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
-                    }
-                }
-                _ => return Err(RuntimeError::Error{span, message:format!("Non shape initialized to obejct")})
-            }
-
-            let object = ValueKind::Object(known_shapes);
-            runtime.reserve_local(local, Value::Object(id, object));
-            
-            Ok(ExecFlow::Normal(span))
-        },
-
         ResolvedStatement::Detach { span, object, shape } => {
             match (evaluate(runtime, object)?, evaluate_shape(runtime, shape)) {
                 (Value::Object(object_id, _), ValueKind::Shape(shape_inst)) => {
@@ -757,10 +772,10 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
             Ok(ExecFlow::Normal(span))
         },
 
-        ResolvedStatement::Attach { span, object, shape, mappings } => {
+        ResolvedStatement::Attach { span, object, attachment } => {
             match evaluate(runtime, object)? {
                 Value::Object(object_id, _) => {
-                    let shape_inst = match evaluate_shape(runtime, shape) {
+                    let shape_inst = match evaluate_shape(runtime, attachment.base) {
                         ValueKind::Shape(inst) => inst,
                         shape => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to object:{:?}", shape, object_id)})
                     };
@@ -769,7 +784,7 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                     if sealed { return Ok(ExecFlow::Normal(span)) }
                     
                     let mut remap = Vec::new();
-                    for mapping in mappings {
+                    for mapping in attachment.mappings {
                         remap.push(Mapping{from: mapping.from.id, to:mapping.to.id, kind:mapping.kind});
                     }
 
@@ -786,7 +801,7 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
 
                     runtime.attach_shape_with_remap(span.clone(), object_id, shape_inst.clone(), remap)?;
                 },
-                object => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to {:?}", shape, object)})
+                object => return Err(RuntimeError::Error{span, message:format!("Could not attach {:?} to {:?}", attachment.base, object)})
             }
             Ok(ExecFlow::Normal(span))
         },

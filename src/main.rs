@@ -2,8 +2,8 @@ use std::{collections::{HashMap, HashSet}, fs};
 use ordered_float::OrderedFloat;
 
 use crate::{
-    analyzer::{AzimuthInfo, LocalId, ObjectInfo, ResolvedExpression, ResolvedFunctionBody, ResolvedStatement, ShapeInfo, Symbol}, 
-    executor::{RuntimeError, ShapeInstance}, lexer::Span, loader::Loader, parser::MappingKind,
+    analyzer::{AzimuthInfo, LocalId, ObjectInfo, ResolvedExpression, ResolvedFunctionBody, ResolvedStatement, ShapeInfo, StaticInfo, Symbol}, 
+    executor::{RuntimeError, ShapeInstance}, lexer::Span, loader::Loader, parser::{Identifier, MappingKind},
 };
 
 pub mod lexer;
@@ -35,6 +35,7 @@ pub enum ValueKind {
     Function(Box<FunctionSignature>),
     Generic(GenericId, Vec<ValueKind>),
     Multiple(Vec<ValueKind>),
+    //Static(Vec<ShapeInstance>),
     #[default] None
 }
 
@@ -147,8 +148,9 @@ impl ValueKind {
                 }
             }
 
+            //ValueKind::Static(_) => false,
+
             ValueKind::Option(k) => k.is_assignable_from(other),
-            ValueKind::Generic(_,_) => true,
             ValueKind::Multiple(kinds) => kinds.iter().any(|kind| kind.is_assignable_from(other.clone())),
 
             ValueKind::None => other == ValueKind::None,
@@ -770,11 +772,12 @@ pub struct Runtime {
     locals: HashMap<LocalId, Value>,
     obj_ref_count: HashMap<ObjectId, u32>,
     local_ref_count: HashMap<LocalId, u32>,
+    next_object_id: ObjectId,
     call_stack: Vec<CallStackFunction>,
 }
 
 impl Runtime {
-    fn new(shapes: HashMap<u32, ShapeInfo>, azimuths: HashMap<u32, AzimuthInfo>) -> Self {
+    fn new(shapes: HashMap<ShapeId, ShapeInfo>, azimuths: HashMap<AzimuthId, AzimuthInfo>) -> Self {
         let global = Object {
                 id: 0,
                 name: format!("global"),
@@ -791,6 +794,7 @@ impl Runtime {
             azimuths,
             objects: HashMap::new(),
             locals: HashMap::new(),
+            next_object_id: 1,
             obj_ref_count: HashMap::new(),
             local_ref_count: HashMap::new(),
             call_stack: Vec::new(),
@@ -799,11 +803,11 @@ impl Runtime {
         runtime
     }
 
-    fn init_static_instances(&mut self, static_info: HashMap<u32, (ObjectInfo, Vec<AzimuthId>)>) -> Result<(), RuntimeError> {
+    fn init_static_instances(&mut self, static_info: HashMap<ShapeId, (StaticInfo, Vec<AzimuthId>)>) -> Result<(), RuntimeError> {
         let shapes = {
             let mut namespaceinfo = Vec::new();
 
-            let mut namespaces : Vec<(&u32, &(ObjectInfo, Vec<AzimuthId>))> = static_info.iter().collect();
+            let mut namespaces : Vec<(&ShapeId, &(StaticInfo, Vec<AzimuthId>))> = static_info.iter().collect();
             namespaces.sort_by(|(a,_), (b,_)| (a).cmp(b));
 
             for (_, (info, azimuths)) in namespaces {
@@ -824,34 +828,39 @@ impl Runtime {
             namespaceinfo
         };
 
-        let evaluated_shapes = {
-            let mut evaluated_shapes = Vec::new();
-            for (static_info, raw_azimuths) in shapes {
-                let mut azimuths = Vec::new();
+        let mut evaluated_shapes = Vec::new();
+        for (static_info, raw_azimuths) in shapes {
+            let mut azimuths = Vec::new();
 
-                for (id, value_type, value) in raw_azimuths {
-                    let mut span = Span::default();
+            for (id, value_type, value) in raw_azimuths {
+                let mut span = Span::default();
 
-                    //println!("Evaluating {}: {:?}\n", id, value);
+                //println!("Evaluating {}: {:?}\n", id, value);
 
-                    let evaluated = match value {
-                        None => None,
-                        Some(expr) => {
-                            span = (*expr).span().clone();
-                            Some(executor::evaluate(self, *expr)?)
-                        }
-                    };
-                    azimuths.push((id, value_type, evaluated, span));
-                }
-
-                evaluated_shapes.push((static_info, azimuths));
+                let evaluated = match value {
+                    None => None,
+                    Some(expr) => {
+                        span = (*expr).span().clone();
+                        Some(executor::evaluate(self, *expr)?)
+                    }
+                };
+                azimuths.push((id, value_type, evaluated, span));
             }
-            evaluated_shapes
-        };
+
+            evaluated_shapes.push((static_info, azimuths));
+        }
         
-        for (static_info, azimuths) in evaluated_shapes {
-            let id = static_info.id;
-            self.create_object(static_info);
+        for (static_shape_id, azimuths) in evaluated_shapes {
+            //let id = static_info.id;
+            let id = self.create_object(format!("STATIC"));
+
+            let object_info = ObjectInfo{id, name:format!("STATIC"), known_shapes:Vec::new(), static_origin:None};
+
+            println!("Trying to get shape: {:?} from {:?}", static_shape_id, self.shapes);
+
+            let shape = self.shapes.get_mut(&static_shape_id).unwrap();
+            shape.static_id = Some(Box::new(object_info));
+
             let object = self.get_object_mut(id);
 
             for (az_id, value_type, default_value, span) in azimuths {
@@ -870,11 +879,17 @@ impl Runtime {
         Ok(())
     }
 
-    fn create_object(&mut self, info: ObjectInfo) {
-        let id = info.id;
+    fn next_obj_id(&mut self) -> ObjectId {
+        let id = self.next_object_id;
+        self.next_object_id += 1;
+        id
+    }
+
+    fn create_object(&mut self, name: Identifier) -> ObjectId {
+        let id = self.next_obj_id();
         let object = Object {
             id: id,
-            name: info.name,
+            name: name,
             flags: ObjectFlags {
                 sealed: false,
             },
@@ -887,6 +902,7 @@ impl Runtime {
         println!("Created object with ID {}, '{}'", object.id, object.name);
         self.objects.insert(id, object);
         self.obj_ref_count.insert(id, 0);
+        id
     }
 
     fn attach_slot(&mut self, span:Span, object_id: ObjectId, azimuth_id: AzimuthId, remap: Option<AzimuthId>, generic: Option<ValueKind>, mapping_kind: Option<MappingKind>, default: Option<Value>) -> Result<bool, RuntimeError> {

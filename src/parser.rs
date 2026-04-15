@@ -62,7 +62,14 @@ enum Presence {
 }
 
 #[derive(Debug, Clone)]
-pub enum Expression {
+pub struct RawAttachment {
+    pub defaults: Vec<(Identifier, Expression)>,
+    pub mappings: Vec<RawMapping>,
+    pub shape: ShapeExpression,
+}
+
+#[derive(Debug, Clone)]
+pub enum Expression { 
     Value(Span, Value),
     Default(Span),
     StringFormat(Span, Vec<Expression>),
@@ -73,6 +80,7 @@ pub enum Expression {
     Variable(Span, Identifier),
     Option(Span, Box<Option<Expression>>),
     Shape(Span, ShapeExpression),
+    ObjectInit(Span, RawAttachment),
     UnaryOp {
         span: Span,
         operator: Operator,
@@ -226,11 +234,11 @@ pub enum Statement {
         generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>,
         extension: bool,
     },
-    DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
+    //DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
     DeclareLocal { span: Span, name: Identifier, value: Expression }, 
     Detach { span: Span, object: Expression, shape: ShapeExpression },
     AddMapping { span: Span, object: Expression, mapping: RawMapping },
-    Attach { span: Span, object: Expression, shape: ShapeExpression, mappings: Vec<RawMapping> },
+    Attach { span: Span, object: Expression, attachment: RawAttachment },
     Print { span: Span, expr: Expression },
     Expression { span: Span, expr: Expression },
     If {
@@ -885,63 +893,8 @@ fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Stat
         TokenKind::Operator(Operator::Attach) => {
             tokens.next(); // consume operator
             
-            let shape = parse_shape_expression(tokens)?;
-            let shape_name = shape.get_identifier();
-
-            // Check for mappings
-            if matches!(tokens.peek().unwrap().kind, TokenKind::LeftParen) {
-                tokens.next(); // consume '{'
-                let mut mappings = Vec::new();
-                let mut values = HashMap::new();
-
-                while let Some(token) = tokens.next() {
-                    match token.kind {
-                        // From slot mapping
-                        TokenKind::Identifier(from_slot) => {
-
-                            // Expect '->' operator
-                            let token = tokens.next().unwrap();
-                            match token.kind {
-                                TokenKind::Operator(Operator::Arrow) => {
-
-                                    // Check for before/after keywords
-                                    let mut mapping_kind = MappingKind::Strict;
-                                    match tokens.peek().unwrap().kind {
-                                        TokenKind::Keyword(Keyword::Before) => {
-                                            tokens.next();
-                                            mapping_kind = MappingKind::Before
-                                        }
-                                        TokenKind::Keyword(Keyword::After) => {
-                                            tokens.next();
-                                            mapping_kind = MappingKind::After
-                                        }
-                                        _ => {}
-                                    }
-
-                                    // Expect to slot identifier
-                                    match tokens.next().unwrap().kind {
-                                        TokenKind::Identifier(to_slot) => mappings.push(RawMapping { from_slot, to_slot, kind:mapping_kind, shape:shape.clone() }),
-                                        other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("Shape"), loc:format!("shape attachment remap value") }),
-                                    }
-
-                                },
-                                TokenKind::Operator(Operator::Assign) => {
-                                    let value = parse_expression(tokens, 0)?;
-                                    values.insert(from_slot, value);
-                                },
-                                other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("->"), loc:format!("shape attachment remap value") }),
-                            }
-                        },
-                        TokenKind::Comma => continue,
-                        TokenKind::RightParen => break,
-                        token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("shape attachment remap") }),
-                    }
-                }
-
-                Ok(Statement::Attach {span, object, shape, mappings })
-            } else {
-                Ok(Statement::Attach {span, object, shape, mappings:Vec::new() })
-            }
+            let attachment = parse_attachment(tokens)?;
+            Ok(Statement::Attach {span, object, attachment})
         }
 
         //Detach
@@ -1134,10 +1087,74 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
             tokens.next();
             Some(parse_expression(tokens, 0)?)
         }
+        TokenKind::Operator(Operator::Attach) => {
+            tokens.next();
+            let attachment = parse_attachment(tokens)?;
+            Some(Expression::ObjectInit(span.clone(), attachment))
+        }
         _ => None
     };
 
     Ok((RawAzimuth { name: slot_name, value_type, flags, set_value }, span.clone()))
+}
+
+fn parse_attachment(tokens: &mut PeekableTokens) -> Result<RawAttachment, ParseError> {
+    let shape = parse_shape_expression(tokens)?;
+
+    // Check for mappings
+    if matches!(tokens.peek().unwrap().kind, TokenKind::LeftParen) {
+        tokens.next(); // consume '{'
+        let mut mappings = Vec::new();
+        let mut values = Vec::new();
+
+        while let Some(token) = tokens.next() {
+            match token.kind {
+                // From slot mapping
+                TokenKind::Identifier(from_slot) => {
+
+                    // Expect '->' operator
+                    let token = tokens.next().unwrap();
+                    match token.kind {
+                        TokenKind::Operator(Operator::Arrow) => {
+
+                            // Check for before/after keywords
+                            let mut mapping_kind = MappingKind::Strict;
+                            match tokens.peek().unwrap().kind {
+                                TokenKind::Keyword(Keyword::Before) => {
+                                    tokens.next();
+                                    mapping_kind = MappingKind::Before
+                                }
+                                TokenKind::Keyword(Keyword::After) => {
+                                    tokens.next();
+                                    mapping_kind = MappingKind::After
+                                }
+                                _ => {}
+                            }
+
+                            // Expect to slot identifier
+                            match tokens.next().unwrap().kind {
+                                TokenKind::Identifier(to_slot) => mappings.push(RawMapping { from_slot, to_slot, kind:mapping_kind, shape:shape.clone() }),
+                                other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("Shape"), loc:format!("shape attachment remap value") }),
+                            }
+
+                        },
+                        TokenKind::Operator(Operator::Assign) => {
+                            let value = parse_expression(tokens, 0)?;
+                            values.push((from_slot, value));
+                        },
+                        other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("->"), loc:format!("shape attachment remap value") }),
+                    }
+                },
+                TokenKind::Comma => continue,
+                TokenKind::RightParen => break,
+                other => return Err(ParseError::UnexpectedToken { span:token.span, token:other, loc:format!("shape attachment remap") }),
+            }
+        }
+
+        Ok(RawAttachment { defaults: values, mappings, shape })
+    } else {
+        Ok(RawAttachment { defaults: Vec::new(), mappings: Vec::new(), shape })
+    }
 }
 
 fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError> {
@@ -1367,8 +1384,9 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                 TokenKind::Operator(Operator::Attach) => {
                     // Object with attachment
                     tokens.next();
-                    let shape = parse_shape_expression(tokens)?;
-                    Ok(Statement::DeclareObject {span, name: object_identifier, shape })
+                    let attachment = parse_attachment(tokens)?;
+                    let value = Expression::ObjectInit(span.clone(), attachment);
+                    Ok(Statement::DeclareLocal {span, name: object_identifier, value })
                 }
                 TokenKind::Operator(Operator::Assign) => {
                     // Local with assignment
@@ -1377,8 +1395,9 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                     Ok(Statement::DeclareLocal {span, name: object_identifier, value })
                 }
                 _ => {
+                    return Err(ParseError::Error{span, message:format!("Backward Type Inference is WIP")})
                     // Object without assignment
-                    Ok(Statement::DeclareObject {span, name: object_identifier, shape:ShapeExpression::Primitive(token.span.clone(), ValueKind::Shape(OBJECT_INSTANCE)) })
+                    //Ok(Statement::DeclareObject {span, name: object_identifier, shape:ShapeExpression::Primitive(token.span.clone(), ValueKind::Shape(OBJECT_INSTANCE)) })
                 }
             }
         },

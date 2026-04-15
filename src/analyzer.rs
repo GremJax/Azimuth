@@ -216,7 +216,7 @@ pub enum ResolvedStatement {
     Switch {
         span: Span, 
         target: ResolvedExpression,
-        branch_statements: Vec<(ResolvedExpression, ResolvedStatement)>,
+        branch_statements: Vec<(ResolvedExpression, bool, ResolvedStatement)>,
         else_statement: Option<Box<ResolvedStatement>>,
     },
     While {
@@ -306,7 +306,7 @@ impl ResolvedStatement {
                 let mut branches_status = ReturnStatus::Never;
                 let mut always_count = 0;
 
-                for (_, branch) in branch_statements {
+                for (_, _, branch) in branch_statements {
                     match branch.walk_returns(expected.clone())? {
                         ReturnStatus::Always => {
                             branches_status = ReturnStatus::Conditionally;
@@ -846,35 +846,6 @@ impl Analyzer {
 
         Ok(())
     }
-
-    /*
-    fn declare_object(&mut self, scope: ScopeId, name: Identifier, shape: ResolvedShapeExpression, static_origin:Option<NamespaceId>) -> (ObjectInfo, LocalId) {
-        let id = self.next_object_id.clone();
-        self.next_object_id += 1;
-
-        let mut known_shapes = Vec::new();
-        known_shapes.push(shape.kind());
-
-        match &shape.kind() {
-            // Add inherited shapes
-            ValueKind::Shape(inst) => {
-                match self.shapes.get(&inst.id) {
-                    Some(known) => {
-                        for parent in &known.parent_ids {
-                            let inst = ShapeInstance{id:parent.id, generics:parent.generics.clone()};
-                            known_shapes.push(ValueKind::Shape(inst))
-                        }
-                    }
-                    None => {}
-                }
-            }
-            _ => {}
-        }
-
-        let local = self.declare_local(scope, name.clone(), known_shapes.clone());
-
-        (ObjectInfo{id: id, name: name, known_shapes:known_shapes.clone(), static_origin}, local)
-    } */
 
     fn declare_local(&mut self, scope: ScopeId, name: Identifier, known_shapes: Vec<ValueKind>) -> LocalId {
         let scope = self.get_scope_mut(scope);
@@ -1540,16 +1511,6 @@ impl Analyzer {
             Statement::DeclareShape { .. } => {
                 Ok(ResolvedStatement::Block(Vec::new()))
             }
-
-            //Statement::DeclareObject { span, name, shape } => {
-            //    let my_scope = self.get_scope_mut(scope);
-            //    if my_scope.symbols.contains_key(&name) { return Err(CompileError::DuplicateSymbol{span, name}); }
-
-            //    let shape = self.resolve_shape_expression(shape, scope)?;
-    
-            //    let (info, local) = self.declare_object(scope, name, shape.clone(), None);
-            //    Ok(ResolvedStatement::DeclareObject{ span, local, info, shape })
-            //}
             Statement::DeclareLocal { span, name, value } => {
                 let my_scope = self.get_scope_mut(scope);
                 if my_scope.symbols.contains_key(&name) { return Err(CompileError::DuplicateSymbol{span, name}); }
@@ -1663,10 +1624,10 @@ impl Analyzer {
                 let target = self.resolve_expression(target, scope, None)?;
                 
                 let mut resolved_branches = Vec::new();
-                for (expr, statement) in branch_statements {
+                for (expr, cont, statement) in branch_statements {
                     let resolved_expr = self.resolve_expression(expr, scope, Some(target.kind()))?;
                     let resolved_statement = self.resolve_statement(statement, scope)?;
-                    resolved_branches.push((resolved_expr, resolved_statement));
+                    resolved_branches.push((resolved_expr, cont, resolved_statement));
                 }
 
                 let else_statement = match else_statement {
@@ -1899,10 +1860,17 @@ impl Analyzer {
                 // Inheritance
                 let mut parent_ids = Vec::new();
                 for parent in parents {
-                    match self.get_shape(shape_scope, parent.get_identifier().clone()) {
-                        Some(info) => parent_ids.push(ShapeInstance{id:info.id, generics:resolved_generics.iter().map(|g| g.kind().clone()).collect()}),
-                        _ => return Err(CompileError::UndefinedSymbol { span, name:parent.get_identifier().clone() })
-                    }
+                    let resolved_parent = self.resolve_shape_expression(parent.clone(), shape_scope)?;
+                    let inst = match resolved_parent {
+                        ResolvedShapeExpression::Simple(_, info) => ShapeInstance { id:info.id, generics:[].to_vec() },
+                        ResolvedShapeExpression::Parameter(_, _) => todo!(),
+                        ResolvedShapeExpression::Applied { base, args,.. } => ShapeInstance { 
+                            id:base.id, 
+                            generics:args.iter().map(|g| g.kind()).collect()
+                        },
+                        other => return Err(CompileError::Error{span, message:format!("Can not inherit from {:?}", other)})
+                    };
+                    parent_ids.push(inst);
                 }
 
                 // Mappings

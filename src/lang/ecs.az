@@ -2,7 +2,13 @@ using std
 
 static Entities {ulong:Entity} = {:}
 
-shape Entity : Named, Identified, Parenting<Entity> {
+static IdCounter = 0
+static NextId() -> int {
+    IdCounter += 1
+    return IdCounter - 1
+}
+
+shape Entity : Named, Identified(Id = NextId()), Parenting<Entity> {
     Tick() {}
     Load() {}
     Setup() {}
@@ -51,5 +57,5 @@ obj2.Scale.X = 6
 print obj.Scale
 print obj2.Scale
 
-//obj := Entity
-//print obj
+obj := Entity
+print obj

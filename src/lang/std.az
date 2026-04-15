@@ -134,7 +134,7 @@ shape Executor {
 }
 
 shape Named {
-    Name string
+    Name string = default
 }
 
 shape StringConvertible {
@@ -142,11 +142,11 @@ shape StringConvertible {
 }
 
 shape Identified {
-    Id uint64
+    Id uint64 = default
 }
 
 shape Versioned {
-    Version uint64
+    Version uint64 = default
     
     IsNewerThan(Versioned other) -> bool
         return self.Version > other.Version

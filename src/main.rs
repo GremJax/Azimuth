@@ -1113,7 +1113,7 @@ impl Runtime {
             };
 
             if shape.generics.len() != shape_id.generics.len() {
-                return Err(RuntimeError::Error{span, message: format!("Invalid number of generic arguments: {:?}", shape_id.generics)});
+                return Err(RuntimeError::Error{span, message: format!("Invalid number of generic arguments for {:?}: {:?}, expected: {:?}", shape.name, shape_id.generics, shape.generics)});
             }
 
             (shape.name.clone(), shape.azimuths.clone(), shape.parent_ids.clone(), shape.generics.len())
@@ -1153,7 +1153,7 @@ impl Runtime {
         
         for parent in parents{
             println!("Attaching inheritance: {:?}", parent);
-            self.attach_shape_with_remap(span.clone(), object_id, ShapeInstance{ id:parent.id, generics:shape_id.generics.clone() }, remap.clone())?;
+            self.attach_shape_with_remap(span.clone(), object_id, parent, remap.clone())?;
         }
 
         Ok(())

@@ -854,14 +854,18 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         ResolvedStatement::Switch { span, target, branch_statements, else_statement } => {
             let target = evaluate(runtime, target)?;
 
-            for (expr, statement) in branch_statements {
+            for (expr, cont, statement) in branch_statements {
                 let comparison = evaluate(runtime, expr)?;
                 if target != comparison { continue }
 
                 let branch_result = execute_statement(runtime, statement)?;
 
                 match branch_result {
-                    ExecFlow::Continue(_) => continue,
+                    ExecFlow::Normal(_) if cont => continue,
+                    ExecFlow::Declare(_, loc) if cont => {
+                        runtime.deref_local(loc, 52);
+                        continue
+                    }
                     other => return Ok(other)
                 }
             }

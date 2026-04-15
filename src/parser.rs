@@ -250,7 +250,7 @@ pub enum Statement {
     Switch {
         span: Span, 
         target: Expression,
-        branch_statements: Vec<(Expression, Statement)>,
+        branch_statements: Vec<(Expression, bool, Statement)>,
         else_statement: Option<Box<Statement>>,
     },
     While {
@@ -1507,6 +1507,12 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                     _ => {
                         let branch_expr = parse_expression(tokens, 0)?;
 
+                        // Fallthrough
+                        let cont = if matches!(tokens.peek().unwrap().kind, TokenKind::Keyword(Keyword::Continue)) {
+                            tokens.next();
+                            true
+                        } else { false };
+
                         // Expect Arrow
                         let token = tokens.next().unwrap();
                         match token.kind {
@@ -1516,7 +1522,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
 
                         let branch_statement = parse_statement(tokens)?;
 
-                        branches.push((branch_expr, branch_statement));
+                        branches.push((branch_expr, cont, branch_statement));
                     }
                 }
             }

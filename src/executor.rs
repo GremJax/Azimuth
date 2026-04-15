@@ -623,7 +623,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
             let output_type = evaluate_shape(runtime, output_type);
             let mut inputs = Vec::new();
             for input in input_types {
-                let kind = evaluate_shape(runtime, input.shape);
+                let kind = input.shape;
                 let local = input.local;
 
                 inputs.push(FunctionParameter{kind, local});
@@ -905,14 +905,6 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                 }
             }
             Ok(ExecFlow::Normal(span))
-        }
-
-        ResolvedStatement::ForInc { span, local, start, cond, inc, statement } => {
-            let start = match evaluate(runtime,  start)? {
-                Value::Number(num) => num,
-                other => return Err(RuntimeError::TypeMismatch { span, found: other, expected: ValueKind::Number(NumKind::Any) }),
-            };
-            todo!()
         }
 
         ResolvedStatement::For{ span, local, target, statement } => {

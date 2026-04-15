@@ -140,8 +140,9 @@ pub enum FunctionBody {
 
 #[derive(Debug, Clone)]
 pub struct RawFunctionParam {
-    pub value_type: ShapeExpression,
-    pub identifier: Option<Identifier>
+    pub value_type: Option<ShapeExpression>,
+    pub identifier: Option<Identifier>,
+    pub def: Option<Expression>,
 }
 
 #[derive(Debug, Clone)]
@@ -261,14 +262,6 @@ pub enum Statement {
         span: Span, 
         local: Identifier,
         target: Expression,
-        statement: Box<Statement>,
-    },
-    ForInc {
-        span: Span,
-        local: Identifier,
-        start: Expression,
-        cond: Expression,
-        inc: Box<Statement>,
         statement: Box<Statement>,
     },
     Try {
@@ -719,41 +712,33 @@ fn parse_function(shape: Option<ShapeExpression>, intrinsic_name:Option<String>,
     let has_self = match shape {
         Some(shape) => {
             // Add self param
-            let self_param = RawFunctionParam{value_type: shape, identifier:Some(format!("self"))};
+            let self_param = RawFunctionParam{value_type: Some(shape), identifier:Some(format!("self")), def:None};
             input_types.push(self_param);
 
             true
         }
         None => false,
     };
-    // else if matches!(tokens.peek().unwrap().kind, TokenKind::Keyword(Keyword::PSelf)){
-    //    tokens.next(); // Consume self keyword
-//
-        // Add self param
-    //    let self_param = RawFunctionParam{value_type: shape, identifier:format!("self")};
-    //    input_types.push(self_param);
-//
-    //    true
-    //} else { false };
 
-    while let Some(token) = tokens.peek() {
-        let span = token.span.clone();
-        match token.kind {
+    while let Some(token) = tokens.next() {
+        match token.kind.clone() {
             TokenKind::Comma => {
-                tokens.next();
             },
             TokenKind::RightParen => {
-                tokens.next();
                 break
-            }
-            _ => { 
-                let value_type = parse_shape_expression(tokens)?;
-                let identifier = match tokens.next().unwrap().kind {
+            },
+            other => {
+                let span = token.span.clone();
+                let identifier = match other {
                     TokenKind::Identifier(k) => Some(k),
                     TokenKind::Keyword(Keyword::Underscore) => None,
                     token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("function parameter definition") }),
                 };
-                input_types.push(RawFunctionParam{value_type, identifier});
+                let kind = match tokens.peek().unwrap().kind {
+                    TokenKind::Comma | TokenKind::RightParen => None,
+                    _ => Some(parse_shape_expression(tokens)?)
+                };
+                input_types.push(RawFunctionParam{value_type:kind, identifier, def:None});
             }
         }
     }
@@ -828,36 +813,42 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
         TokenKind::LeftParen => {
             tokens.next(); // consume paren
 
-            while let Some(token) = tokens.peek() {
-                let span = token.span.clone();
-                match token.kind {
+            while let Some(token) = tokens.next() {
+                match token.kind.clone() {
+                    TokenKind::Comma => {},
                     TokenKind::RightParen => {
-                        tokens.next();
                         break
-                    }
-                    TokenKind::Comma => { tokens.next(); }
-                    _ => {
-                        let value_type = parse_shape_expression(tokens)?;
-                        let token = tokens.next().unwrap();
-                        let identifier = match token.kind {
-                            TokenKind::Identifier(l) => Some(l),
+                    },
+                    other => {
+                        let identifier = match other {
+                            TokenKind::Identifier(k) => Some(k),
                             TokenKind::Keyword(Keyword::Underscore) => None,
-                            other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("parameter name"), loc:format!("lymphnoid parameters") })
+                            token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("function parameter definition") }),
                         };
-                        params.push(RawFunctionParam { value_type, identifier });
+                        let kind = match tokens.peek().unwrap().kind {
+                            TokenKind::Comma | TokenKind::RightParen => None,
+                            _ => Some(parse_shape_expression(tokens)?)
+                        };
+                        params.push(RawFunctionParam{value_type:kind, identifier, def:None});
                     }
                 }
             }
         }
         _ => {
-            let value_type = parse_shape_expression(tokens)?;
             let token = tokens.next().unwrap();
             let identifier = match token.kind {
                 TokenKind::Identifier(l) => Some(l),
                 TokenKind::Keyword(Keyword::Underscore) => None,
                 other => return Err(ParseError::IncorrectToken { span:token.span, token:other, expected:format!("parameter name"), loc:format!("lymphnoid parameters") })
             };
-            params.push(RawFunctionParam { value_type, identifier });
+            let kind = match tokens.peek().unwrap().kind {
+                TokenKind::Operator(Operator::Arrow) | TokenKind::Operator(Operator::BWOr) => {
+                    tokens.next();
+                    None
+                }
+                _ => Some(parse_shape_expression(tokens)?)
+            };
+            params.push(RawFunctionParam { value_type:kind, identifier, def:None });
         }
     }
 
@@ -1054,7 +1045,7 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
         let func = parse_function(shape_expr, intrinsic_name, flags.clone(), tokens)?;
         
         // Signature
-        let sig_input_types = func.input_types.iter().map(|i| i.value_type.clone()).collect();
+        let sig_input_types = func.input_types.iter().map(|i| i.value_type.clone().expect(format!("{:?}",i).as_str())).collect();
         let signature = RawFunctionSignature{ has_self:func.has_self, input_types:sig_input_types, output_type:func.output_type.clone() };
         let value_type = ShapeExpression::FunctionSignature(span.clone(), Box::new(signature));
         
@@ -1525,15 +1516,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                     Ok(Statement::For{span, local, target, statement:Box::new(statement) })
                 }
 
-                TokenKind::Operator(Operator::Assign) => {
-                    let start = parse_expression(tokens, 0)?; 
-                    let cond = parse_expression(tokens, 0)?;
-                    let statement = parse_statement(tokens)?;
-                    let inc = parse_statement(tokens)?;
-                    Ok(Statement::ForInc{span, local, start, cond, inc:Box::new(inc), statement:Box::new(statement) })
-                }
-
-                token => Err(ParseError::IncorrectToken { span, token, expected: format!("in or assign"), loc: format!("For loop header") }),
+                token => Err(ParseError::IncorrectToken { span, token, expected: format!("in"), loc: format!("For loop header") }),
             }
         },
 

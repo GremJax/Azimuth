@@ -125,14 +125,14 @@ Functions are written just like any other azimuth, but with parenthesis followin
     PrintFoo() 
         print "foo"
     
-    PrintBar(string x) {
+    PrintBar(x string) {
         print "bar"
         print x
     }
 
 Object parameters can be listed with multiple input types for multiple minimum requirements.
 
-    PrintIdAndName(Named Identified x) {
+    PrintIdAndName(x Named Identified) {
         print "Id: \{x.Id}, Name: \{x.Name}"
     }
 
@@ -179,12 +179,12 @@ Lymphnoid types are the same syntax, just with types instead of names
 
 Lymphnoids are actually just function signatures in the compiler, so any function works
 
-    foo(|(int32, int32) -> int32| function, int32 x, int32 y) 
+    foo(function |(int32, int32) -> int32|, x int32, y int32) 
         print function(x, y)
 
     foo(|(x, y) -> x + y|, 5, 6)    // lymphnoids work
 
-    sum(int32 x, int32 y) -> int32 
+    sum(x int32, y int32) -> int32 
         return x + y
 
     foo(sum, 5, 6)                // named functions also work
@@ -490,7 +490,7 @@ The "$" operator can turn reflected types and instances back into their object, 
     CompareType(@Shape shape, Object object) -> bool
         return object =~ $shape
 
-    ExecuteIfPresent(Action @Azimuth az, Object object) {
+    ExecuteIfPresent(az Action @Azimuth, object Object) {
         if @object.Mappings.Contains(az.Id)
             object.$az()
     }

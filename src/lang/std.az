@@ -4,65 +4,65 @@ shape Object {}
 
 namespace Math {
 
-    static Neg(number x) -> number 
+    static Neg(x number) -> number 
         return -x
-    static BWNot(number x) -> number 
+    static BWNot(x number) -> number 
         return ~x
 
-    static Succ(number x) -> number 
+    static Succ(x number) -> number 
         return x + 1
 
-    static Add(number a, number b) -> number 
+    static Add(a number, b number) -> number 
         return a + b
-    static Sub(number a, number b) -> number 
+    static Sub(a number, b number) -> number 
         return a - b
-    static Mul(number a, number b) -> number 
+    static Mul(a number, b number) -> number 
         return a * b
-    static Div(number a, number b) -> number 
+    static Div(a number, b number) -> number 
         return a / b
-    static Mod(number a, number b) -> number 
+    static Mod(a number, b number) -> number 
         return a % b
 
-    static BWAnd(number a, number b) -> number 
+    static BWAnd(a number, b number) -> number 
         return a & b
-    static BWOr(number a, number b) -> number 
+    static BWOr(a number, b number) -> number 
         return a | b
-    static BWXor(number a, number b) -> number 
+    static BWXor(a number, b number) -> number 
         return a ^ b
-    static BWLShift(number a, number b) -> number 
+    static BWLShift(a number, b number) -> number 
         return a << b
-    static BWRShift(number a, number b) -> number 
+    static BWRShift(a number, b number) -> number 
         return a >> b
 
-    static Abs(number x) -> number 
+    static Abs(x number) -> number 
         return (x >= 0) ? x : -x
-    static Max(number a, number b) -> number 
+    static Max(a number, b number) -> number 
         return (a >= b) ? a : b
-    static Min(number a, number b) -> number 
+    static Min(a number, b number) -> number 
         return (a <= b) ? a : b
-    static Clamp(number x, number min, number max) -> number 
+    static Clamp(x number, min number, max number) -> number 
         return Max(min, Min(max, x))
-    static Sgn(number x) -> number 
+    static Sgn(x number) -> number 
         return (x > 0) ? 1 : (x < 0) ? -1 : 0
 
-    static IsEven(number x) -> bool
+    static IsEven(x number) -> bool
         return (x % 2) == 0
-    static IsOdd(number x) -> bool
+    static IsOdd(x number) -> bool
         return (x % 2) != 0
-    static LT(number a, number b) -> bool
+    static LT(a number, b number) -> bool
         return a < b
-    static LTE(number a, number b) -> bool
+    static LTE(a number, b number) -> bool
         return a <= b
-    static GT(number a, number b) -> bool
+    static GT(a number, b number) -> bool
         return a > b
-    static GTE(number a, number b) -> bool
+    static GTE(a number, b number) -> bool
         return a >= b
-    static Eq(number a, number b) -> bool
+    static Eq(a number, b number) -> bool
         return a == b
-    static NEq(number a, number b) -> bool
+    static NEq(a number, b number) -> bool
         return a != b
 
-    static GCD(number a, number b) -> number {
+    static GCD(a number, b number) -> number {
         while b != 0 {
             let temp = b
             b = a % b
@@ -70,20 +70,20 @@ namespace Math {
         }
         return a
     }
-    static LCM(number a, number b) -> number {
+    static LCM(a number, b number) -> number {
         if a == 0 || b == 0 return 0
         return (a / GCD(a, b)) * b
     }
-    static Mid(number a, number b) -> number {
+    static Mid(a number, b number) -> number {
         let max = Max(a,b)
         let min = Min(a,b)
         return min + ((max - min) / 2)
     }
 
-    static Reflect(number x, number mid) -> number 
+    static Reflect(x number, mid number) -> number 
         return (2 * mid) - x
 
-    static Pow(number x, number exp) -> number {
+    static Pow(x number, exp number) -> number {
         let res = 1
         for i in 1 ... exp {
             res *= x
@@ -91,16 +91,16 @@ namespace Math {
         return res
     }
 
-    static intrinsic Sqrt(number x) -> number
+    static intrinsic Sqrt(x number) -> number
 
-    static Floor(double x) -> double
+    static Floor(x double) -> double
         return x - x%1 + 1
-    static Ceil(double x) -> double
+    static Ceil(x double) -> double
         return x - x%1
 }
 
 namespace IO {
-    static Print(string x) print x
+    static Print(x string) print x
 
     static intrinsic ReadLine() -> string?
     static intrinsic Args() -> [string]
@@ -108,9 +108,9 @@ namespace IO {
 
 namespace Random {
     static intrinsic Int() -> int32
-    static intrinsic Range(int from, int to) -> int32
+    static intrinsic Range(from int, to int) -> int32
 
-    static Chance(int chance) -> bool 
+    static Chance(chance int) -> bool 
         return Random.Range(1, chance) == 1
 
     static Bool() -> bool 
@@ -121,12 +121,12 @@ shape Error {
     Message string = default
     Throw() throw self.Message
 
-    static Try(|() -> Object| func) -> bool
+    static Try(func |() -> Object|) -> bool
         return func() !~ Error
 }
 
 shape Executor {
-    Run([|() -> void|] hooks) {
+    Run(hooks [|() -> void|]) {
         for hook in hooks {
             hook()
         }
@@ -148,7 +148,7 @@ shape Identified {
 shape Versioned {
     Version uint64 = default
     
-    IsNewerThan(Versioned other) -> bool
+    IsNewerThan(other Versioned) -> bool
         return self.Version > other.Version
 }
 
@@ -156,7 +156,7 @@ shape Parenting<T : Parenting<T> > {
     Parent T?
     Children {T} = {}
 
-    SetParent(T parent) {
+    SetParent(parent T) {
         self.Parent?.Children.Remove(self)
         parent.Children.Add(self)
         self.Parent = parent
@@ -167,7 +167,7 @@ shape Parenting<T : Parenting<T> > {
         //self.Parent = null
     }
 
-    IsChildOf(T other) -> bool
+    IsChildOf(other T) -> bool
         return (self.Parent == other) || (self.Parent?.IsChildOf(other) ?? false)
 
     Root() -> T 
@@ -182,11 +182,11 @@ shape Array<T> {
     Len() -> uint64 return len self
     //ToArray() -> [T] return self
 
-    intrinsic Append(T item) -> bool
-    intrinsic Add(T item, uint64 index) -> bool
-    intrinsic Remove(T item, uint64 index) -> bool
+    intrinsic Append(item T) -> bool
+    intrinsic Add(item T, index uint64) -> bool
+    intrinsic Remove(item T, index uint64) -> bool
 
-    Contains(T item) -> bool {
+    Contains(item T) -> bool {
         //for i in self
         //    if i == item return true
         return false
@@ -196,17 +196,17 @@ shape Array<T> {
 shape Range {
     intrinsic ToArray() -> [int]
 
-    intrinsic Create(int start, int end, int by) -> range
-    intrinsic CreateExclusive(int start, int end, int by) -> range
+    intrinsic Create(start int, end int, by int) -> range
+    intrinsic CreateExclusive(start int, end int, by int) -> range
 }
 
 shape Set<T> {
     Len() -> uint64 return len self
     intrinsic ToArray() -> [T]
     
-    intrinsic Add(T item) -> bool
-    intrinsic Remove(T item) -> bool
-    intrinsic Contains(T item) -> bool
+    intrinsic Add(item T) -> bool
+    intrinsic Remove(item T) -> bool
+    intrinsic Contains(item T) -> bool
 }
 
 shape Dict<K, V> {
@@ -215,16 +215,16 @@ shape Dict<K, V> {
     intrinsic Keys() -> {K}
     intrinsic Values() -> [V]
     
-    intrinsic Set(K key, V value) -> bool
-    intrinsic Remove(K key) -> bool
+    intrinsic Set(key K, value V) -> bool
+    intrinsic Remove(key K) -> bool
 
-    intrinsic Get(K key) -> V?
-    GetOr(K key, K def) -> V
+    intrinsic Get(key K) -> V?
+    GetOr(key K, def K) -> V
         return self.Get(key) ?? def
 
-    ContainsKey(K key) -> bool 
+    ContainsKey(key K) -> bool 
         return self.Get(key) != null
-    ContainsValue(V value) -> bool 
+    ContainsValue(value V) -> bool 
         return self.Values().Contains(value)
 }
 
@@ -238,16 +238,16 @@ shape Pair<K, V> {
 
 shape Collection<T> {
     abstract Len() -> uint64
-    abstract Contains(T item) -> bool
+    abstract Contains(item T) -> bool
     abstract ToArray() -> [T]
 }
 
 shape Comparable<T> {
-    abstract Compare(T other) -> int32
+    abstract Compare(other T) -> int32
 }
 
 shape Equatable<T> {
-    abstract Equals(T other) -> bool
+    abstract Equals(other T) -> bool
 }
 
 shape Hashable {
@@ -285,25 +285,25 @@ shape Int32 {
 }
 
 shape Bool {
-    static Eq(bool x, bool y) -> bool
+    static Eq(x bool, y bool) -> bool
         return x == y
-    static NEq(bool x, bool y) -> bool
+    static NEq(x bool, y bool) -> bool
         return x != y
-    static And(bool x, bool y) -> bool
+    static And(x bool, y bool) -> bool
         return x && y
-    static Or(bool x, bool y) -> bool
+    static Or(x bool, y bool) -> bool
         return x || y
-    static Not(bool x) -> bool
+    static Not(x bool) -> bool
         return !x
 
-    static Parse(string input) -> bool?
+    static Parse(input string) -> bool?
         switch input.Lower().Trim() {
             "true" -> return true
             "false" -> return false
             else -> return null
         }
 
-    static FromBinary(number input) -> bool?
+    static FromBinary(input number) -> bool?
         switch input {
             1 -> return true
             0 -> return false
@@ -315,7 +315,7 @@ shape String {
     Len() -> uint64 return len self
 
 /*
-    StartsWith(string substring) -> bool {
+    StartsWith(substring string) -> bool {
         if self.Len() < substring.Len() return false
 
         for i in 0 ... substring.Len() 
@@ -323,7 +323,7 @@ shape String {
 
         return true
     }
-    EndsWith(string substring) -> bool {
+    EndsWith(substring string) -> bool {
         if self.Len() < substring.Len() return false
 
         for i in 0 ... substring.Len() {
@@ -364,34 +364,34 @@ shape MapDict<K, V : MapDictEntry<K,V> > {
     Values() -> [V] 
         return self.Dict.Values()
     
-    Set(MapDictEntry<K,V> value) -> bool 
+    Set(value MapDictEntry<K,V>) -> bool 
         return self.Dict.Set(value.GetKey(), value)
-    Remove(MapDictEntry<K,V> value) -> bool 
+    Remove(value MapDictEntry<K,V>) -> bool 
         return self.Dict.Remove(value.GetKey())
 
-    Get(K key) -> V? 
+    Get(key K) -> V? 
         return self.Dict.Get(key)
-    GetOr(K key, K def) -> V 
+    GetOr(key K, def K) -> V 
         return self.Dict.GetOr(key, def)
 
-    ContainsKey(K key) -> bool 
+    ContainsKey(key K) -> bool 
         return self.Dict.ContainsKey(key)
-    ContainsValue(MapDictEntry<K,V> value) -> bool 
+    ContainsValue(value MapDictEntry<K,V>) -> bool 
         return self.Dict.ContainsKey(value.GetKey())
 }
 
 shape Observable<T> {
     Listeners {|T|} = {}
     
-    Notify(T value) {
+    Notify(value T) {
         for listener in self.Listeners
             listener(value)
     }
     
-    Subscribe(|T| listener)
+    Subscribe(listener |T|)
         self.Listeners.Add(listener)
     
-    Unsubscribe(|T| listener)
+    Unsubscribe(listener |T|)
         self.Listeners.Remove(listener)
 }
 

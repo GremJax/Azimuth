@@ -192,8 +192,9 @@ pub enum ResolvedFunctionBody {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedFunctionParameter {
-    pub shape: ResolvedShapeExpression,
-    pub local: Option<LocalId>
+    pub shape: ValueKind,
+    pub local: Option<LocalId>,
+    pub def: Option<ResolvedExpression>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -229,14 +230,6 @@ pub enum ResolvedStatement {
         span: Span, 
         local: LocalId,
         target: ResolvedExpression,
-        statement: Box<ResolvedStatement>,
-    },
-    ForInc {
-        span: Span, 
-        local: LocalId,
-        start: ResolvedExpression,
-        cond: ResolvedExpression,
-        inc: Box<ResolvedStatement>,
         statement: Box<ResolvedStatement>,
     },
     Try {
@@ -503,7 +496,7 @@ impl ResolvedExpression {
             }
             ResolvedExpression::Function { input_types, output_type, has_self, .. } => {
                 let resolved_out = output_type.kind();
-                let resolved_in = input_types.iter().map(|i| i.shape.kind()).collect();
+                let resolved_in = input_types.iter().map(|i| i.shape.clone()).collect();
                 ValueKind::Function(Box::new(FunctionSignature{ input_types:resolved_in, output_type:resolved_out, has_self:*has_self }))
             }
             ResolvedExpression::Reflection(_, expr) => match *expr.clone() {
@@ -933,6 +926,27 @@ impl Analyzer {
         Ok(member)
     }
 
+    pub fn get_azimuth_in_parents(&self, span:&Span, scope:ScopeId, identifier:Identifier, shape:ShapeId, signature:Option<FunctionSignature>) -> Result<Option<&AzimuthInfo>, CompileError> {
+        let shape = self.shapes.get(&shape).unwrap();
+        let az = match self.get_azimuth(span, scope, identifier.clone(), Some(shape.name.clone()), None)? {
+            Some(az) => Some(az),
+            None => {
+                let mut found = None;
+                for parent in &shape.parents {
+                    match self.get_azimuth_in_parents(span, scope, identifier.clone(), parent.base.id, signature.clone())? {
+                        None => {}, 
+                        Some(az) => {
+                            found = Some(az);
+                            break
+                        }
+                    }
+                }
+                found
+            }
+        };
+        Ok(az)
+    }
+
     pub fn resolve_attachment(&mut self, span:&Span, attachment:RawAttachment, scope:ScopeId) -> Result<ResolvedAttachment, CompileError> {
         let shape = self.resolve_shape_expression(attachment.shape, scope)?;
         let (qualifier, parents, inst) = match &shape {
@@ -948,7 +962,10 @@ impl Analyzer {
 
         let mut resolved_defaults = Vec::new();
         for (identifier, val) in attachment.defaults {
-            let azimuth = self.get_azimuth(span, scope, identifier, Some(qualifier.clone()), None)?.unwrap().clone();
+            let azimuth = match self.get_azimuth_in_parents(span, scope, identifier.clone(), inst.id, None)? {
+                Some(az) => az,
+                None => return Err(CompileError::Error{span:span.clone(), message:format!("Azimuth not found: {:?}", identifier)})
+            }.clone();
             let value = self.resolve_expression(val, scope, Some(azimuth.value_type.clone()))?;
             resolved_defaults.push((azimuth.id, value));
         }
@@ -1360,15 +1377,28 @@ impl Analyzer {
                 let new_scope = self.create_scope(scope);
 
                 let mut resolved_inputs = Vec::new();
-                for input in input_types {
-                    let value_type = self.resolve_shape_expression(input.value_type, scope)?;
+                for i in 0..input_types.len() {
+                    let input = &input_types[i];
+
+                    let value_type = match &input.value_type {
+                        Some(kind) => self.resolve_shape_expression(kind.clone(), scope)?.kind(),
+                        None => match &known_type {
+                            Some(ValueKind::Function(sig)) => {
+                                match sig.input_types.get(i) {
+                                    Some(kind) => kind.clone(),
+                                    None => return Err(CompileError::Error{span, message:format!("Ambiguous type for param: {:?}", input)})
+                                }
+                            }
+                            _ => return Err(CompileError::Error{span, message:format!("Ambiguous type for param: {:?}", input)})
+                        }
+                    };
                     
-                    let id = match input.identifier {
-                        Some(identifier) => Some(self.declare_local(new_scope, identifier, [value_type.kind()].to_vec())),
+                    let id = match &input.identifier {
+                        Some(identifier) => Some(self.declare_local(new_scope, identifier.clone(), [value_type.clone()].to_vec())),
                         None => None
                     };
 
-                    let resolved_input = ResolvedFunctionParameter{ shape:value_type, local:id };
+                    let resolved_input = ResolvedFunctionParameter{ shape:value_type, local:id, def:None };
 
                     resolved_inputs.push(resolved_input);
                 }
@@ -1666,27 +1696,6 @@ impl Analyzer {
                 Ok(ResolvedStatement::For{span, local:id, target, statement:Box::new(statement)})
             }
             
-            Statement::ForInc { span, local, start, cond, inc, statement } => {
-                let resolved_start = self.resolve_expression(start, scope, None)?;
-                if !resolved_start.kind().is_assignable_from(ValueKind::Number(NumKind::Any)) {
-                    return Err(CompileError::TypeMismatch { span, expected: ValueKind::Number(NumKind::Any), found: resolved_start.kind(), loc: format!("for loop start value") } )
-                }
-                let resolved_condition = self.resolve_expression(cond, scope, Some(ValueKind::Bool))?;
-                if !resolved_condition.kind().is_assignable_from(ValueKind::Bool) {
-                    return Err(CompileError::ExpectedBoolCondition { span, found: resolved_condition.kind() })
-                }
-
-                let new_scope = self.create_scope(scope);
-                
-                let resolved_type = ResolvedShapeExpression::Primitive(span.clone(), ValueKind::Number(NumKind::Int32));
-                let id = self.declare_local(new_scope, local, [resolved_type.kind()].to_vec()).clone();
-
-                let inc = self.resolve_statement(*inc, new_scope)?;
-                let statement = self.resolve_statement(*statement, new_scope)?;
-
-                Ok(ResolvedStatement::ForInc{span, local:id, start:resolved_start, cond:resolved_condition, inc:Box::new(inc), statement:Box::new(statement)})
-            }
-
             Statement::Assign {span, target, value } => {
                 let target = self.resolve_expression(target, scope, None)?;
 

@@ -9,10 +9,11 @@ static NextId() -> int {
 }
 
 shape Entity : Named, Identified, Parenting<Entity> {
-
-    //attach() {
-    //    self.Id = NextId()
-    //}
+    static Create() -> Entity {
+        return new Entity(
+            Id = NextId()
+        )
+    }
 
     Tick() {}
     Load() {}
@@ -70,10 +71,8 @@ obj.Position.X = 100
 print obj.Position
 print binkus
 
-let nameThing = "Hello"
-switch nameThing {
-    "Hi"    -> print "KYS"
-    "Hello" continue -> print "OHE"
-    "AEFE"  -> print "AAAA"
-    else    -> print "EE"
-}
+static Thing |(int, int) -> int| = |(x, y) -> int { return x + y }|
+print Thing(4, 3)
+
+let newEntity = Entity.Create()
+print newEntity

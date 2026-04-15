@@ -577,39 +577,6 @@ struct SlotState {
 
 // Shape
 pub type ShapeId = u32;
-pub struct Shape {
-    id: ShapeId,
-    name: String,
-    
-    num_generics: u32,
-    azimuths: Vec<AzimuthId>,
-    def_mappings: HashMap<AzimuthId, AzimuthId>,
-    static_object_id: ObjectId,
-    parent_ids: Vec<u32>,
-}
-
-impl Shape {
-    fn define_slot(&mut self, id: AzimuthId, name: String, 
-        kind: ValueKind, flags: AzimuthFlags) -> Azimuth {
-        let slot = Azimuth {
-            shape_id: self.id,
-            id: id.clone(),
-            name: format!("{}.{}", self.name, name),
-            value_type: kind,
-            flags,
-        };
-        self.azimuths.push(id);
-        slot
-    }
-
-    fn remap_slot(&mut self, from: AzimuthId, to: AzimuthId) {
-        //if !to.value_type.is_assignable_from(from.value_type.clone()) { 
-        //    panic!("Type mismatch: {:?} not assignable from {:?}", to.value_type, from.value_type); 
-        //}
-        
-        self.def_mappings.insert(from.clone(), to.clone());
-    }
-}
 
 // Object
 pub type ObjectId = u32;

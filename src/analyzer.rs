@@ -175,6 +175,7 @@ pub struct Scope {
     pub symbols: HashMap<Identifier, Symbol>,
     pub generics: GenericId,
     pub using: Vec<NamespaceId>,
+    pub aliases: HashMap<Identifier, ResolvedShapeExpression>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -199,9 +200,6 @@ pub struct ResolvedFunctionParameter {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ResolvedStatement {
-    Using { span: Span, package: NamespaceId },
-    Namespace { span: Span, name: Identifier, content: Vec<ResolvedStatement>},
-    DeclareShape { span: Span, info: ShapeInfo, azimuths: Vec<AzimuthInfo> },
     //DeclareObject { span: Span, local: LocalId, info: ObjectInfo, shape: ResolvedShapeExpression },
     DeclareLocal { span: Span, info: LocalInfo, value: ResolvedExpression },
     Detach { span: Span, object: ResolvedExpression, shape: ResolvedShapeExpression },
@@ -465,6 +463,13 @@ impl ResolvedExpression {
         }
     }
 
+    pub fn known_kinds(&self) -> Vec<ValueKind> {
+        match self.kind() {
+            ValueKind::Object(known) => known,
+            other => [other].to_vec()
+        }
+    }
+
     pub fn kind(&self) -> ValueKind {
         match self {
             ResolvedExpression::Value(_, value) => value.kind(),
@@ -623,6 +628,7 @@ impl Analyzer {
             symbols: HashMap::new(),
             generics:0, 
             using: Vec::new(),
+            aliases: HashMap::new(),
         };
         Analyzer{
             scopes: [global].to_vec(), 
@@ -654,6 +660,7 @@ impl Analyzer {
             symbols: HashMap::new(), 
             generics:parent_scope.generics,
             using: Vec::new(),
+            aliases: HashMap::new(),
         };
 
         self.next_scope_id += 1;
@@ -672,6 +679,19 @@ impl Analyzer {
             _ => {}
         }
         using
+    }
+    
+    pub fn get_alias(&self, scope_id:ScopeId, identifier:&Identifier) -> Option<&ResolvedShapeExpression> {
+        let scope = self.get_scope(scope_id);
+        match scope.aliases.get(identifier) {
+            Some(found) => Some(found),
+            _ => {
+                match scope.parent {
+                    Some(parent) => self.get_alias(parent, identifier),
+                    _ => None
+                }
+            }
+        }
     }
 
     pub fn get_symbol(&self, id:ScopeId, identifier:Identifier) -> Option<&Symbol> {
@@ -947,7 +967,7 @@ impl Analyzer {
         Ok(az)
     }
 
-    pub fn resolve_attachment(&mut self, span:&Span, attachment:RawAttachment, scope:ScopeId) -> Result<ResolvedAttachment, CompileError> {
+    pub fn resolve_attachment(&mut self, span:&Span, attachment:RawAttachment, scope:ScopeId, target_known:Option<Vec<ValueKind>>) -> Result<ResolvedAttachment, CompileError> {
         let shape = self.resolve_shape_expression(attachment.shape, scope)?;
         let (qualifier, parents, inst) = match &shape {
             ResolvedShapeExpression::Simple(_, info) => (info.name.clone(), info.parents.clone(), ShapeInstance { id:info.id, generics:[].to_vec() }),
@@ -972,7 +992,7 @@ impl Analyzer {
     
         let mut resolved_mappings = Vec::new();
         for mapping in attachment.mappings {
-            let resolved = self.resolve_mapping(span.clone(), mapping, scope)?;
+            let resolved = self.resolve_mapping(span.clone(), mapping, scope, target_known.clone())?;
             resolved_mappings.push(resolved);
         }
 
@@ -986,7 +1006,9 @@ impl Analyzer {
 
     pub fn resolve_expression(&mut self, expression:Expression, scope:ScopeId, known_type:Option<ValueKind>) -> Result<ResolvedExpression, CompileError> {
         let resolved = match expression {
-            Expression::Value(span, value) => ResolvedExpression::Value(span, value),
+            Expression::Value(span, value) => {
+                ResolvedExpression::Value(span, value)
+            }
             Expression::Array(span, expressions, kind) => {
                 let mut values = Vec::new();
                 for item in expressions {
@@ -1117,7 +1139,7 @@ impl Analyzer {
             }
 
             Expression::ObjectInit(span, attachment) => {
-                let attachment = self.resolve_attachment(&span, attachment, scope)?;
+                let attachment = self.resolve_attachment(&span, attachment, scope, None)?;
                 ResolvedExpression::ObjectInit(span, attachment)
             }
 
@@ -1324,13 +1346,20 @@ impl Analyzer {
 
             Expression::ArrayAccess{ span, target, index, optional, chained} => {
                 let target = self.resolve_expression(*target, scope, None)?;
-                let index = self.resolve_expression(*index, scope, Some(ValueKind::Number(NumKind::Any)))?;
 
-                if !index.kind().is_assignable_from(ValueKind::Number(NumKind::Int32)) {
-                    return Err(CompileError::TypeMismatch { span, expected: ValueKind::Number(NumKind::Int32), found: index.kind(), loc:format!("array index") });
+                let (access_kind, value_kind) = match target.kind() {
+                    ValueKind::Array(kind) => (ValueKind::Number(NumKind::Any), *kind),
+                    ValueKind::Dict(k_kind,v_kind) => (*k_kind, *v_kind),
+                    other => return Err(CompileError::Error{span, message:format!("Array access not permitted for {:?}", other)}),
+                };
+
+                let access = self.resolve_expression(*index, scope, Some(ValueKind::Number(NumKind::Any)))?;
+
+                if !access.kind().is_assignable_from(access_kind.clone()) {
+                    return Err(CompileError::TypeMismatch { span, expected:access_kind, found: access.kind(), loc:format!("array access") });
                 }
 
-                ResolvedExpression::ArrayAccess{span, target:Box::new(target), index:Box::new(index), optional, chained}
+                ResolvedExpression::ArrayAccess{span, target:Box::new(target), index:Box::new(access), optional, chained}
             }
 
             Expression::FunctionCall { span, caller, target, args, optional, chained } => {
@@ -1465,12 +1494,18 @@ impl Analyzer {
 
     pub fn resolve_shape_expression(&mut self, expression:ShapeExpression, scope:ScopeId) -> Result<ResolvedShapeExpression, CompileError> {
         match expression{
-            ShapeExpression::Shape(span, k) => match self.get_shape(scope, k.clone()) {
-                Some(info) => Ok(ResolvedShapeExpression::Simple(span, info.clone())),
-                _ => { 
-                    match self.get_symbol(scope, k.clone()) {
-                        Some(Symbol::Generic(info)) => Ok(ResolvedShapeExpression::Parameter(span, info.name.clone())),
-                        _ => Err(CompileError::UndefinedSymbol { span, name: format!("{} A", k) })
+            ShapeExpression::Shape(span, k) => {
+                match self.get_alias(scope, &k) {
+                    Some(found) => return Ok(found.clone()),
+                    None => {}
+                }
+                match self.get_shape(scope, k.clone()) {
+                    Some(info) => Ok(ResolvedShapeExpression::Simple(span, info.clone())),
+                    _ => { 
+                        match self.get_symbol(scope, k.clone()) {
+                            Some(Symbol::Generic(info)) => Ok(ResolvedShapeExpression::Parameter(span, info.name.clone())),
+                            _ => Err(CompileError::UndefinedSymbol { span, name: format!("{} A", k) })
+                        }
                     }
                 }
             }
@@ -1504,18 +1539,26 @@ impl Analyzer {
         }
     }
 
-    pub fn resolve_mapping(&mut self, span:Span, mapping:RawMapping, scope:ScopeId) -> Result<ResolvedMapping, CompileError> {
-        let from = if let Some(symbol) = self.get_azimuth(&span, scope, mapping.from_slot.clone(), None, None)?{
+    pub fn get_az_in_mapping(&self, span:&Span, identifier:Identifier, shape:&Identifier, scope:ScopeId, target_known:Option<Vec<ValueKind>>) -> Result<AzimuthInfo, CompileError> {
+        let found = if let Some(symbol) = self.get_azimuth(&span, scope, identifier.clone(), Some(shape.clone()), None)?{
             symbol.clone()
-        } else if let Some(symbol) = self.get_azimuth(&span, scope, mapping.from_slot.clone(), Some(mapping.shape.get_identifier().clone()), None)?{
+        } else if let Some(symbol) = self.get_azimuth(&span, scope, identifier.clone(), None, None)?{
             symbol.clone()
-        } else { return Err(CompileError::UndefinedSymbol { span, name: mapping.from_slot }); };
+        } else { 
+            match target_known { 
+                Some(known) => self.get_member_without_qualifier(&ValueKind::Object(known), identifier.clone(), span.clone(), scope)?.clone(),
+                None => return Err(CompileError::UndefinedSymbol { span:span.clone(), name: identifier.clone() }) 
+            }
+        };
+        Ok(found)
+    }
+
+    pub fn resolve_mapping(&mut self, span:Span, mapping:RawMapping, scope:ScopeId, target_known:Option<Vec<ValueKind>>) -> Result<ResolvedMapping, CompileError> {
+        println!("Resolving {} -> {}", mapping.from_slot, mapping.to_slot);
+        let shape = mapping.shape.get_identifier();
         
-        let to = if let Some(symbol) = self.get_azimuth(&span, scope, mapping.to_slot.clone(), None, None)?{
-            symbol.clone()
-        } else if let Some(symbol) = self.get_azimuth(&span, scope, mapping.from_slot.clone(), Some(mapping.shape.get_identifier()), None)?{
-            symbol.clone()
-        } else { return Err(CompileError::UndefinedSymbol { span, name: mapping.to_slot }); };
+        let from = self.get_az_in_mapping(&span, mapping.from_slot, &shape, scope, target_known.clone())?;
+        let to = self.get_az_in_mapping(&span, mapping.to_slot, &shape, scope, target_known.clone())?;
 
         Ok(ResolvedMapping{from, to, kind:mapping.kind})
     }
@@ -1529,6 +1572,9 @@ impl Analyzer {
             Statement::Expression {span, expr} => Ok(ResolvedStatement::Expression{span, expr:self.resolve_expression(expr, scope, None)?}),
             
             Statement::Using { .. } => {
+                Ok(ResolvedStatement::Block(Vec::new()))
+            }
+            Statement::Alias { .. } => {
                 Ok(ResolvedStatement::Block(Vec::new()))
             }
             Statement::Namespace{ .. } => {
@@ -1566,15 +1612,19 @@ impl Analyzer {
                     shape,
                 })
             }
-            Statement::AddMapping { span, object, mapping } => 
+            Statement::AddMapping { span, object, mapping } => {
+                let obj = self.resolve_expression(object, scope, None)?;
+                let known = obj.known_kinds();
                 Ok(ResolvedStatement::AddMapping{ span:span.clone(), 
-                    object: self.resolve_expression(object, scope, None)?, 
-                    mapping: self.resolve_mapping(span, mapping, scope)?,
-                }),
+                    object: obj,
+                    mapping: self.resolve_mapping(span, mapping, scope, Some(known))?,
+                })
+            }
             Statement::Attach { span, object, attachment } => {
                 let object = self.resolve_expression(object, scope, None)?;
+                let known = object.known_kinds();
 
-                let attachment = self.resolve_attachment(&span, attachment, scope)?;
+                let attachment = self.resolve_attachment(&span, attachment, scope, Some(known))?;
 
                 // Validate abstract
                 let shape = self.shapes.get(&attachment.base.id).unwrap().clone();
@@ -1625,7 +1675,7 @@ impl Analyzer {
 
             Statement::If { span, condition, true_statement, else_statement } => {
                 let resolved_condition = self.resolve_expression(condition, scope, Some(ValueKind::Bool))?;
-                if resolved_condition.kind() != ValueKind::Bool {
+                if !resolved_condition.kind().is_assignable_from(ValueKind::Bool) {
                     return Err(CompileError::ExpectedBoolCondition { span, found: resolved_condition.kind() })
                 }
 
@@ -1858,9 +1908,15 @@ impl Analyzer {
                 }
 
                 // Inheritance
+                let mut parent_headers = Vec::new();
+                for parent in parents {
+                    let shape = self.resolve_shape_expression(parent.shape.clone(), shape_scope)?;
+                    parent_headers.push(shape.kind());
+                }
+
                 let mut resolved_parents = Vec::new();
                 for parent in parents {
-                    let resolved = self.resolve_attachment(&span, parent.clone(), shape_scope)?;
+                    let resolved = self.resolve_attachment(&span, parent.clone(), shape_scope, Some(parent_headers.clone()))?;
                     resolved_parents.push(resolved);
                 }
                 
@@ -1883,6 +1939,22 @@ impl Analyzer {
         }
         Ok(())
     }
+
+    fn resolve_aliases(&mut self, namespace: Namespace, scope: ScopeId) -> Result<(), CompileError> {
+        let scope = *self.namespace_scopes.get(&namespace.id).unwrap_or(&scope);
+
+        for (alias, shape) in &namespace.aliases {
+            let resolved = self.resolve_shape_expression(shape.clone(), scope)?;
+            let scope_mut = self.get_scope_mut(scope);
+            scope_mut.aliases.insert(alias.clone(), resolved);
+        }
+        for child_name in &namespace.children {
+            let child = self.loader.get_single_namespace(namespace.span.clone(), child_name)?.clone();
+            self.resolve_aliases(child, scope)?;
+        }
+        Ok(())
+    }
+
 
     fn resolve_namespace_kinds(&mut self, namespace: Namespace, scope: ScopeId) -> Result<(), CompileError> {
         let span = namespace.span.clone();
@@ -1943,6 +2015,7 @@ impl Analyzer {
         self.resolve_namespace_headers(root.clone(), 0)?;
         //println!("Done.\n{:?}\n{:?}\nShapes...", self.azimuths, self.shapes);
         self.resolve_namespace_shapes(root.clone(), 0)?;
+        self.resolve_aliases(root.clone(), 0)?;
         //println!("Done.\n{:?}\n{:?}\nKinds...", self.azimuths, self.shapes);
         self.resolve_namespace_kinds(root.clone(), 0)?;
         //println!("Done.\n{:?}\n{:?}\nDefaults...", self.azimuths, self.shapes);

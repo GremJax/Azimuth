@@ -93,9 +93,9 @@ namespace Math {
 
     static intrinsic Sqrt(x number) -> number
 
-    static Floor(x double) -> double
-        return x - x%1 + 1
     static Ceil(x double) -> double
+        return x - x%1 + 1
+    static Floor(x double) -> double
         return x - x%1
 }
 
@@ -176,6 +176,9 @@ shape Parenting<T : Parenting<T> > {
 
 shape Linked<T> {
     Next Linked<T>?
+
+    HasNext() -> bool 
+        return self.Next != null
 }
 
 shape Array<T> {
@@ -184,11 +187,17 @@ shape Array<T> {
 
     intrinsic Append(item T) -> bool
     intrinsic Add(item T, index uint64) -> bool
-    intrinsic Remove(item T, index uint64) -> bool
+    intrinsic Remove(index uint64) -> bool
 
     Contains(item T) -> bool {
         //for i in self
         //    if i == item return true
+        return false
+    }
+    
+    RemoveValue(item T) -> bool {
+        //for i in self
+        //    if i == item return self.Remove(i)
         return false
     }
 }
@@ -341,13 +350,13 @@ shape String {
 }
 
 shape Point {
-    X int
-    Y int
+    X int = 0
+    Y int = 0
 }
 
-shape Vector {
-    X int
-    Y int
+shape Vec2 {
+    X int = 0
+    Y int = 0
 }
 
 shape MapDictEntry<K, V : MapDictEntry<K,V> > {

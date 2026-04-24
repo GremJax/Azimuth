@@ -57,6 +57,7 @@ pub struct Namespace {
     pub children: Vec<NamespaceId>,
     pub azimuths: Vec<LoadedAzimuth>,
     pub dependencies: Vec<NamespaceId>,
+    pub aliases: Vec<(Identifier, ShapeExpression)>,
 }
 
 impl Namespace {
@@ -123,6 +124,7 @@ impl Loader {
             children: Vec::new(),
             azimuths: Vec::new(),
             dependencies: Vec::new(),
+            aliases: Vec::new(),
         };
         Loader { 
             source_dir: source_dir.to_string(),
@@ -190,12 +192,16 @@ impl Loader {
         let mut children = Vec::new();
         let mut azimuths = Vec::new();
         let mut dependencies = Vec::new();
+        let mut aliases = Vec::new();
 
         for statement in statements {
             match statement {
                 Statement::Using { package, .. } => {
                     let name = format!("{}::{}", self.namespaces.get(0).unwrap().name, package);
                     dependencies.push(name);
+                }
+                Statement::Alias { new, target, .. } => {
+                    aliases.push((new, target));
                 }
                 Statement::DeclareShape { span, name, slot_ids, parents, generics, extension, .. } => {
                     let name = format!("{}::{}", identifier, name);
@@ -214,6 +220,7 @@ impl Loader {
                         kind:NamespaceKind::Shape{ parents, generics}, 
                         children:Vec::new(), 
                         dependencies:dependencies.clone(),
+                        aliases:Vec::new(),
                         azimuths 
                     };
                     
@@ -253,7 +260,7 @@ impl Loader {
                 _ => {}
             }
         }
-        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies};
+        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies, aliases};
         self.namespaces.push(namespace.clone());
         Ok(namespace)
     }

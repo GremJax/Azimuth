@@ -31,7 +31,7 @@ pub enum ValueKind {
     Object(Vec<ValueKind>),
     Local(Box<ValueKind>),
     Pointer(Box<ValueKind>),
-    ArrayElement(Box<ValueKind>),
+    Element(Box<ValueKind>),
     Function(Box<FunctionSignature>),
     Generic(GenericId, Vec<ValueKind>),
     Multiple(Vec<ValueKind>),
@@ -102,7 +102,7 @@ impl ValueKind {
             }
             ValueKind::Local(k) => k.is_assignable_from(other),
             ValueKind::Pointer(k) => k.is_assignable_from(other),
-            ValueKind::ArrayElement(k) => k.is_assignable_from(other),
+            ValueKind::Element(k) => k.is_assignable_from(other),
 
             ValueKind::Function(info) => {
                 // Actions that return values are ok
@@ -128,10 +128,10 @@ impl ValueKind {
 
             //ValueKind::Static(_) => false,
 
-            ValueKind::Option(k) => k.is_assignable_from(other),
+            ValueKind::Option(k) => k.is_assignable_from(other.clone()) || other.is_assignable_from(ValueKind::Bool),
             ValueKind::Multiple(kinds) => kinds.iter().any(|kind| kind.is_assignable_from(other.clone())),
 
-            ValueKind::None => other == ValueKind::None,
+            ValueKind::None => other == ValueKind::None || other.is_assignable_from(ValueKind::Bool),
         }
     }
 
@@ -182,6 +182,23 @@ impl Number {
             Number::Float64(_) => NumKind::Float64,
             Number::Any(_) => NumKind::Any,
             _ => todo!()
+        }
+    }
+
+    fn to(&self, kind:NumKind) -> Number {
+        use NumKind::*;
+        match kind {
+            UInt8 => Number::UInt8(self.to_u8()),
+            UInt16 => Number::UInt16(self.to_u16()),
+            UInt32 => Number::UInt32(self.to_u32()),
+            UInt64 => Number::UInt64(self.to_u64()),
+            Int8 => Number::Int8(self.to_i8()),
+            Int16 => Number::Int16(self.to_i16()),
+            Int32 => Number::Int32(self.to_i32()),
+            Int64 => Number::Int64(self.to_i64()),
+            Float32 => Number::Float32(self.to_f32().into()),
+            Float64 => Number::Float64(self.to_f64().into()),
+            _ => self.clone()
         }
     }
 
@@ -342,7 +359,7 @@ pub enum Value {
     Object(ObjectId, ValueKind),
     Local(LocalId, ValueKind),
     Pointer(ObjectId, AzimuthId, ValueKind),
-    ArrayElement(ObjectId, AzimuthId, ValueKind, usize),
+    Element(Box<Value>, Box<Value>, ValueKind),
 
     Shape(ShapeInstance),
 
@@ -401,6 +418,8 @@ impl Value {
                 format!("Obj{}.{}: {:?}", id, az, shape),
             Value::Function(func) => 
                 format!("|({:?}) -> {:?} {:?}|", func.input_types, func.output_type, func.func),
+            Value::Element(target, access, _) =>
+                format!("{}[{}]", target, access),
             other => format!("{:?}", other),
         }
     }
@@ -418,8 +437,8 @@ impl Value {
             Value::Object(_, kind) => kind.clone(),
             Value::Shape(inst) => ValueKind::Shape(inst.clone()),
             Value::Local(_, kind) => kind.clone(),
-            Value::Pointer(_, _, kind) => kind.clone(),
-            Value::ArrayElement(_, _, kind, _) => kind.clone(),
+            Value::Pointer(_, _, kind) => ValueKind::Pointer(Box::new(kind.clone())),
+            Value::Element(_, _, kind) => ValueKind::Element(Box::new(kind.clone())),
             Value::Function(func) => 
                 ValueKind::Function(Box::new(FunctionSignature{
                     has_self:func.has_self,
@@ -428,6 +447,16 @@ impl Value {
                 })),
             Value::FunctionChain(_, info) => info.clone(),
             Value::None => ValueKind::None,
+        }
+    }
+
+    fn convert_to(&self, kind:ValueKind) -> Value {
+        use ValueKind::*;
+
+        match (kind, self) {
+            (Bool, Value::None) => Value::Bool(false),
+            (Number(kind), Value::Number(num)) => Value::Number(num.to(kind)),
+            _ => self.clone()
         }
     }
 }
@@ -801,7 +830,7 @@ impl Runtime {
 
             let object_info = ObjectInfo{id, name:format!("STATIC"), known_shapes:Vec::new(), static_origin:None};
 
-            println!("Trying to get shape: {:?} from {:?}", static_shape_id, self.shapes);
+            //println!("Trying to get shape: {:?} from {:?}", static_shape_id, self.shapes);
 
             let shape = self.shapes.get_mut(&static_shape_id).unwrap();
             shape.static_id = Some(Box::new(object_info));
@@ -1112,8 +1141,10 @@ impl Runtime {
             }
         }
         
-        for parent in shape.parents{
+        for mut parent in shape.parents{
             println!("Attaching inheritance: {:?}", parent);
+            parent.mappings.append(&mut attachment.mappings.clone());
+            parent.defaults.append(&mut attachment.defaults.clone());
             self.attach_shape(span.clone(), object_id, parent)?;
         }
 

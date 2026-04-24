@@ -234,6 +234,11 @@ pub enum Statement {
         generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>,
         extension: bool,
     },
+    Alias {
+        span: Span,
+        new: Identifier,
+        target: ShapeExpression,
+    },
     //DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
     DeclareLocal { span: Span, name: Identifier, value: Expression }, 
     Detach { span: Span, object: Expression, shape: ShapeExpression },
@@ -1152,7 +1157,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
     let token = tokens.peek().unwrap();
     let span = token.span.clone();
 
-    match &token.kind {
+    let statement = match &token.kind {
 
         // Package import
         TokenKind::Keyword(Keyword::Using) => {
@@ -1185,6 +1190,27 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
 
             Ok(Statement::Using {span, package:namespace_id })
         },
+
+        // Alias
+        TokenKind::Keyword(Keyword::Alias) => {
+            tokens.next(); // consume keyword
+
+            let token: Token = next(tokens, format!("alias"))?;
+            let identifier = match token.kind {
+                TokenKind::Identifier(name) => name.clone(),
+                token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("alias") }),
+            };
+
+            // Arrow
+            match next(tokens, format!("alias"))?.kind {
+                TokenKind::Operator(Operator::Arrow) => {},
+                token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("alias") }),
+            };
+
+            let shape = parse_shape_expression(tokens)?;
+
+            Ok(Statement::Alias{span:token.span, new:identifier, target:shape})
+        }
 
         // Shape declaration
         TokenKind::Keyword(Keyword::Shape) | TokenKind::Keyword(Keyword::Extension) => {
@@ -1557,7 +1583,19 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
         }
 
         token => Err(ParseError::UnexpectedToken { span, token:token.clone(), loc:format!("statements") }),
+    }?;
+
+    // Consume following semicolon
+    if let Some(token) = tokens.peek() {
+        match token.kind {
+            TokenKind::Semicolon => {
+                tokens.next();
+            }
+            _ => {}
+        }
     }
+
+    Ok(statement)
 }
 
 pub struct ParsedAtlas{

@@ -3,6 +3,7 @@ dependencies {
 }
 chart Test {
     std         -> std.az
-    Simple      -> simple.az
+    //Simple      -> simple.az
     ECS         -> ecs.az
+    ECSGame     -> ecsGame.az
 }

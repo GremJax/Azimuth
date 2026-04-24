@@ -1,18 +1,35 @@
 using std
 
-static Entities {ulong:Entity} = {:}
+alias EntityId -> ulong
 
-static IdCounter int = 0
-static NextId() -> int {
+static Entities {EntityId : Entity} = {:}
+static TickOrder [EntityId] = []
+
+static Tick() {
+    for entityId in TickOrder {
+        //Entities[entityId].Tick()
+    }
+}
+
+static IdCounter EntityId = 0
+static NextId() -> EntityId {
     IdCounter += 1
     return IdCounter - 1
 }
 
 shape Entity : Named, Identified, Parenting<Entity> {
     static Create() -> Entity {
-        return new Entity(
+        let entity = new Entity(
             Id = NextId()
         )
+        //Entities[entity.Id] = entity
+        //TickOrder.Append(entity.Id)
+        return entity
+    }
+
+    Delete() {
+        //Entities.Remove(self.Id)
+        //TickOrder.RemoveValue(self.Id)
     }
 
     Tick() {}
@@ -49,30 +66,3 @@ shape MeshPoint : Position {
 shape Mesh {
     Points {MeshPoint} = {}
 }
-
-let obj := Transform
-print obj
-print obj.Scale
-
-let obj2 := Transform
-print obj2
-obj.Scale.X = 5
-obj2.Scale.X = 6
-
-print obj.Scale
-print obj2.Scale
-
-obj := Entity
-print obj
-
-let binkus = obj.Position.Clone()
-obj.Position.X = 100
-
-print obj.Position
-print binkus
-
-static Thing |(int, int) -> int| = |(x, y) -> int { return x + y }|
-print Thing(4, 3)
-
-let newEntity = Entity.Create()
-print newEntity

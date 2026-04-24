@@ -1,13 +1,11 @@
 use crate::analyzer::{Analyzer, LocalId, ObjectInfo, ResolvedAttachment, ResolvedFunctionBody, StaticInfo};
 use crate::intrinsic::IntrinsicParameters;
-use crate::parser::Identifier;
 use crate::{AzimuthId, CallStackFunction, Function, FunctionParameter, MappingTo, NumKind};
 use crate::lexer::{Operator, Span};
 use crate::{
     Mapping, ObjectId, Number, Runtime, ShapeId, Value, ValueKind, executor,
     analyzer::{ResolvedExpression, ResolvedShapeExpression, ResolvedStatement, Symbol},
 };
-use core::num;
 use std::collections::{HashMap, HashSet};
 use std::{fs, usize};
 
@@ -587,7 +585,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                             // Remove from stack
                             runtime.call_stack.pop();
 
-                            Ok(value)
+                            Ok(value.convert_to(func.output_type))
                         },
                         ExecFlow::Normal(span) => {
                             if expected_return != ValueKind::None {
@@ -657,24 +655,20 @@ pub fn evaluate_place(runtime: &mut Runtime, expression:ResolvedExpression) -> R
         },
         ResolvedExpression::ArrayAccess{ span, target, index, optional, chained} => {
             let target = evaluate_place(runtime, *target)?;
-            let index = evaluate(runtime, *index)?;
-            
-            let i = if let Value::Number(index) = index {
-                index.to_i32() as usize
-            } else { return Err(RuntimeError::TypeMismatch { span, found: index, expected: ValueKind::Number(NumKind::Int32) }) };
-            
-            match target {
-                Value::Pointer(object_id, azimuth_id, kind) => {
-                    Ok(Value::ArrayElement(object_id, azimuth_id, kind, i))
-                }
-                Value::Local(id, kind) if matches!(kind, ValueKind::Array(_)) => {
-                    todo!()
-                    //Ok(Value::ArrayElement(id, kind, i))
-                }
-                Value::None if chained => Ok(Value::None),
-                other => Err(RuntimeError::Error{span, message:format!("Array access not permitted for {:?}[{}]", other, i)})
+
+            let (access_kind, value_kind) = match target.kind() {
+                ValueKind::Array(kind) => (ValueKind::Number(NumKind::Any), *kind),
+                ValueKind::Dict(k_kind,v_kind) => (*k_kind, *v_kind),
+                ValueKind::None if chained => return Ok(Value::None),
+                other => return Err(RuntimeError::Error{span, message:format!("Array access not permitted for {:?}", other)}),
+            };
+
+            let access = evaluate(runtime, *index)?;
+            if !access.kind().is_assignable_from(access_kind.clone()) {
+                return Err(RuntimeError::TypeMismatch{span, found:access, expected:access_kind})
             }
             
+            Ok(Value::Element(Box::new(target), Box::new(access), value_kind))
         },
         ResolvedExpression::Variable(_, Symbol::Local(k)) => Ok(Value::Local(k.id, runtime.get_local(k.id).unwrap().kind())),
         other => evaluate(runtime, other), 
@@ -722,10 +716,6 @@ pub enum ExecFlow {
 
 pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) -> Result<ExecFlow, RuntimeError> {
     match statement {
-        ResolvedStatement::Using { span, package} => {
-            
-            Ok(ExecFlow::Normal(span))
-        },
         ResolvedStatement::Expression { span, expr } => { 
             evaluate(runtime, expr)?;
             Ok(ExecFlow::Normal(span))
@@ -806,8 +796,8 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                 Value::Pointer(object_id, az, kind) => {
                     runtime.set_slot_value(span.clone(), object_id, az, val)?;
                 }
-                Value::ArrayElement(obj, az, kind, i) => {
-                    runtime.set_slot_value_array_element(obj, az, i, val);
+                Value::Element(target, access, kind) => {
+                    //runtime.set_slot_value_array_element(obj, az, i, val);
                 }
                 Value::Local(loc, kind) => {
                     runtime.reserve_local(loc, val);
@@ -830,17 +820,18 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         }
 
         ResolvedStatement::If { span, condition, true_statement, else_statement } => {
+            let kind = condition.kind();
             let cond = evaluate(runtime, condition)?;
 
-            match cond {
-                Value::Bool(true) => execute_statement(runtime, *true_statement),
-                Value::Bool(false) => {
+            match (kind, cond) {
+                (ValueKind::Bool, Value::Bool(false)) | (ValueKind::Option(_), Value::None) => {
                     if let Some(statement) = else_statement {
                         return execute_statement(runtime, *statement)
                     }
                     Ok(ExecFlow::Normal(span))
                 }
-                other => Err(RuntimeError::Error{span, message:format!("If condition was not true or false: {:?}", other)}),
+                (ValueKind::Bool, Value::Bool(true)) | (ValueKind::Option(_), _) => execute_statement(runtime, *true_statement),
+                (_, other) => Err(RuntimeError::Error{span, message:format!("If condition was not true or false: {:?}", other)}),
             }
         }
 
@@ -885,12 +876,13 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
         }
 
         ResolvedStatement::While { span, condition, statement } => {
+            let kind = condition.kind();
             let mut flag = true;
             while flag {
-                flag = match evaluate(runtime, condition.clone())? {
-                    Value::Bool(true) => true,
-                    Value::Bool(false) => false,
-                    other => return Err(RuntimeError::Error{span, message:format!("While condition was not true or false: {:?}", other)}),
+                flag = match (kind.clone(), evaluate(runtime, condition.clone())?) {
+                    (ValueKind::Bool, Value::Bool(false)) | (ValueKind::Option(_), Value::None) => false,
+                    (ValueKind::Bool, Value::Bool(true)) | (ValueKind::Option(_), _)  => true,
+                    (_, other) => return Err(RuntimeError::Error{span, message:format!("While condition was not true or false: {:?}", other)}),
                 };
 
                 if flag { 

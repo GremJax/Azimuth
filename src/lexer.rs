@@ -71,7 +71,7 @@ impl Operator {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Keyword {
     // Atlas
-    Namespace, Using,
+    Namespace, Using, Alias,
     Chart, Dependencies,
     Lazy, Hidden, Trailhead,
 
@@ -123,6 +123,7 @@ pub enum TokenKind{
     LeftParen,
     RightParen,
     Comma,
+    Semicolon,
     NewLine,
     LeftBrace,
     RightBrace,
@@ -137,7 +138,7 @@ pub struct Token {
     pub kind: TokenKind,
 }
 
-static WHITESPACE: &[char] = &[' ', '\n', '\t', '\r', ';'];
+static WHITESPACE: &[char] = &[' ', '\n', '\t', '\r'];
 
 type PeekableChars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
 
@@ -382,6 +383,7 @@ impl Lexer {
             '[' => Ok(Token{span:self.span(), kind:TokenKind::LeftBracket}),
             ']' => Ok(Token{span:self.span(), kind:TokenKind::RightBracket}),
             ',' => Ok(Token{span:self.span(), kind:TokenKind::Comma}),
+            ';' => Ok(Token{span:self.span(), kind:TokenKind::Semicolon}),
             _ if ch.is_alphanumeric() || ch == '_' => {
                 let span= self.span();
                 let mut identifier = String::new();
@@ -404,6 +406,7 @@ impl Lexer {
 
                     "namespace" => TokenKind::Keyword(Keyword::Namespace),
                     "using" => TokenKind::Keyword(Keyword::Using),
+                    "alias" => TokenKind::Keyword(Keyword::Alias),
                     "extension" => TokenKind::Keyword(Keyword::Extension),
                     "shape" => TokenKind::Keyword(Keyword::Shape),
                     "enum" => TokenKind::Keyword(Keyword::Enum),
@@ -477,6 +480,7 @@ impl Lexer {
                     "bool" => TokenKind::Type(ValueKind::Bool),
                     "string" => TokenKind::Type(ValueKind::String),
                     "void" => TokenKind::Type(ValueKind::None),
+                    "object" => TokenKind::Type(ValueKind::Object(Vec::new())),
 
                     _ => TokenKind::Identifier(identifier),
                 }})

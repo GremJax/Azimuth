@@ -1,0 +1,50 @@
+using std
+using ecs
+
+shape Counter : Named {
+    Value int = 0
+    Step int = 1
+
+    Reset() self.Value = 0
+
+    Next() -> int {
+        self.Value += self.Step
+        return self.Value
+    }
+}
+
+shape PrintThing {
+    Print() {
+        print "Hi John"
+    }
+}
+
+let obj = new Counter (
+    Name = "Jimmy"
+    Value = 10
+    Step = 4
+)
+
+obj := Identified (
+    Id -> Value
+)
+
+obj := PrintThing (
+    Print -> before Next
+)
+
+print obj.Id
+
+print obj.Next()
+print obj.Next()
+print obj.Next()
+print obj.Next()
+print obj.Next()
+print obj.Next()
+
+print obj.Name
+
+print obj.Id
+
+print obj
+

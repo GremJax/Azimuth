@@ -5,7 +5,7 @@ use crate::executor::{OBJECT_INSTANCE, ShapeInstance};
 use crate::intrinsic::IntrinsicOp;
 use crate::lexer::{self, Keyword, Operator, Span, Token, TokenKind, UNARY_OPERATORS};
 use crate::loader::{AtlasLocation, AtlasMapping, AtlasMappingFlags, NamespaceId};
-use crate::{AzimuthFlags, Function, FunctionSignature, Value, ValueKind, intrinsic};
+use crate::{AzimuthFlags, Function, FunctionSignature, NumKind, Number, Value, ValueKind, intrinsic};
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
@@ -161,6 +161,28 @@ pub struct RawFunctionSignature {
 }
 
 #[derive(Debug, Clone)]
+pub enum AnnotationKind {
+    Lang,
+
+}
+
+impl AnnotationKind {
+    pub fn params(&self) -> Vec<ValueKind> {
+        use AnnotationKind::*;
+        match self {
+            Lang => [ValueKind::String].to_vec(),
+            _ => [].to_vec()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Annotation {
+    pub kind: AnnotationKind,
+    pub args: Vec<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum ShapeExpression {
     Shape(Span, Identifier),
     Primitive(Span, ValueKind),
@@ -233,6 +255,7 @@ pub enum Statement {
         parents: Vec<RawAttachment>,
         generics: Vec<(ShapeExpression, Vec<ShapeExpression>)>,
         extension: bool,
+        annotations: Vec<Annotation>,
     },
     Alias {
         span: Span,
@@ -334,7 +357,19 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
             Expression::Reflection(span, Box::new(expr))
         }
 
-        TokenKind::Number(num) => Expression::Value(span, (num as i32).into()),
+        TokenKind::Number(num, kind) => Expression::Value(span, match kind {
+            NumKind::Any => Number::Any(num.into()).into(),
+            NumKind::UInt8 => (num as u8).into(),
+            NumKind::UInt16 => (num as u16).into(),
+            NumKind::UInt32 => (num as u32).into(),
+            NumKind::UInt64 => (num as u64).into(),
+            NumKind::Int8 => (num as i8).into(),
+            NumKind::Int16 => (num as i16).into(),
+            NumKind::Int32 => (num as i32).into(),
+            NumKind::Int64 => (num as i64).into(),
+            NumKind::Float32 => (num as f32).into(),
+            NumKind::Float64 => (num as f64).into(),
+        }),
         TokenKind::Bool(b) => Expression::Value(span, b.into()),
         TokenKind::String(s) => Expression::Value(span, s.into()),
         TokenKind::NoneValue => Expression::Value(span, Value::None),
@@ -879,6 +914,42 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
     Ok(Expression::Function{ span, has_self:false, input_types:params, output_type, func:Box::new(func), captures})
 }
 
+fn parse_annotation(span:&Span, tokens: &mut PeekableTokens) -> Result<Annotation, ParseError> {
+    let kind = match tokens.next().unwrap().kind {
+        TokenKind::Identifier(id) => {
+            match id.as_str() {
+                "Lang" => AnnotationKind::Lang,
+                other => return Err(ParseError::Error{span:span.clone(), message:format!("Invalid annotation type: {}", other)})
+            }
+        }
+        other => return Err(ParseError::IncorrectToken { span:span.clone(), token:other, expected: format!("Identifier"), loc: format!("Annotation") })
+    };
+
+    let params = kind.params().len();
+    if params <= 0 {
+        return Ok(Annotation{kind, args:[].to_vec()})
+    }
+
+    // Expect (
+    let token = tokens.next().unwrap();
+    if !matches!(token.kind, TokenKind::LeftParen) {
+        return Err(ParseError::IncorrectToken { span:token.span, token:token.kind, expected:format!("("), loc:format!("Annotation parameters") })
+    }
+
+    let mut found = Vec::new();
+    for _ in 0..params {
+        found.push(parse_expression(tokens, 0)?);
+    }
+    
+    // Expect )
+    let token = tokens.next().unwrap();
+    if !matches!(token.kind, TokenKind::RightParen) {
+        return Err(ParseError::IncorrectToken { span:token.span, token:token.kind, expected:format!(")"), loc:format!("Annotation parameters") })
+    }
+
+    Ok(Annotation{kind, args:found})
+}
+
 fn parse_object_statement(span:Span, tokens: &mut PeekableTokens) -> Result<Statement, ParseError> {
     // Build member call
     let object = parse_expression(tokens, 0)?;
@@ -985,6 +1056,15 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
         _ => false
     };
     
+    // Private
+    let is_private = match tokens.peek().unwrap().kind {
+        TokenKind::Keyword(Keyword::Private) => {
+            tokens.next();
+            true
+        }
+        _ => false
+    };
+    
     // Intrinsic
     let is_intrinsic = match tokens.peek().unwrap().kind {
         TokenKind::Keyword(Keyword::Intrinsic) => {
@@ -1040,7 +1120,7 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
     // Function check
     if matches!(tokens.peek().unwrap().kind, TokenKind::LeftParen) {
         
-        let flags = crate::AzimuthFlags { is_static:true, is_abstract, is_const, is_locked };
+        let flags = crate::AzimuthFlags { is_static:true, is_abstract, is_const, is_locked, is_private };
 
         // Function
         let shape_expr = match shape_identifier {
@@ -1072,7 +1152,7 @@ fn parse_azimuth(shape_identifier: Option<Identifier>, tokens: &mut PeekableToke
     }
     
     // Flags
-    let flags = crate::AzimuthFlags { is_static, is_abstract, is_const, is_locked };
+    let flags = crate::AzimuthFlags { is_static, is_abstract, is_const, is_locked, is_private };
 
     // Type
     let value_type = parse_shape_expression(tokens)?;
@@ -1154,6 +1234,19 @@ fn parse_attachment(tokens: &mut PeekableTokens) -> Result<RawAttachment, ParseE
 }
 
 fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError> {
+    // Collect annotations
+    let mut annotations = Vec::new();
+    while let Some(token) = tokens.peek() {
+        let span = token.span.clone();
+        if matches!(token.kind, TokenKind::Operator(Operator::Hash)) {
+            tokens.next(); // consume '#'
+            annotations.push(parse_annotation(&span, tokens)?);
+        } else {
+            break;
+        }
+    }
+
+    // Parse statement
     let token = tokens.peek().unwrap();
     let span = token.span.clone();
 
@@ -1303,7 +1396,7 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
                 return Err(ParseError::IncorrectToken{span, token:token.kind, expected:format!("{{"), loc:format!("shape declaration")});
             }
 
-            Ok(Statement::DeclareShape { span, name: shape_identifier, slot_ids, parents, generics, extension })
+            Ok(Statement::DeclareShape { span, name: shape_identifier, slot_ids, parents, generics, extension, annotations })
         },
 
         // Azimuth declaration within namespace

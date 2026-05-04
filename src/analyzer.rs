@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, AzimuthId, Function, FunctionParameter, FunctionSignature, GenericId, NumKind, Number, ObjectId, ShapeId, Value, ValueKind, analyzer, executor::{self, OBJECT_INSTANCE, ShapeInstance}, intrinsic::IntrinsicOp, lexer::{self, Span}, loader::{Loader, Namespace, NamespaceId, NamespaceKind}, parser::{self, FunctionBody, MappingKind, RawAttachment, RawMapping}}; 
+use crate::{AzimuthFlags, AzimuthId, Function, FunctionParameter, FunctionSignature, GenericId, NumKind, Number, ObjectId, ShapeId, Value, ValueKind, analyzer, executor::{self, OBJECT_INSTANCE, ShapeInstance}, intrinsic::IntrinsicOp, lexer::{self, Span}, loader::{Loader, Namespace, NamespaceId, NamespaceKind}, parser::{self, Annotation, AnnotationKind, FunctionBody, MappingKind, RawAttachment, RawMapping}}; 
 use parser::{RawAzimuth, Expression, Statement, ShapeExpression};
 use lexer::{Operator};
 
@@ -493,7 +493,8 @@ impl ResolvedExpression {
                 ValueKind::Array(value_type) => *value_type.clone(),
                 ValueKind::Range(num_kind) => ValueKind::Number(num_kind),
                 ValueKind::String => ValueKind::String,
-                other => panic!("{:?}: Iterable caled on {:?}", span, other)
+                ValueKind::Dict(_, value_kind) => *value_kind.clone(),
+                other => panic!("{}: Array Access called on {:?}", span, other),
             }
             ResolvedExpression::FunctionCall { target, .. } => match target.kind() {
                 ValueKind::Function(info) => info.output_type.clone(),
@@ -543,7 +544,7 @@ pub fn type_binary_operands(operator: Operator) -> ValueKind {
         Operator::Mul | Operator::Div | Operator::Sub | Operator::Mod |
         Operator::BWAnd | Operator::BWOr | Operator::BWXor | Operator::BWNot | Operator::BWShiftL | Operator::BWShiftR |
         Operator::Inc | Operator::Dec | Operator::Range | Operator::RangeLT
-            => ValueKind::Number(NumKind::Int32),
+            => ValueKind::Number(NumKind::Any),
             
         Operator::And | Operator::Or | Operator::Not
             => ValueKind::Bool,
@@ -577,8 +578,8 @@ macro_rules! numeric_binop {
             Operator::BWXor    => ResolvedExpression::Value($span, (left ^ right).into()),
             Operator::BWShiftL => ResolvedExpression::Value($span, (left << right).into()),
             Operator::BWShiftR => ResolvedExpression::Value($span, (left >> right).into()),
-            Operator::Range    => ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32, true)),
-            Operator::RangeLT  => ResolvedExpression::Value($span, executor::create_range(left as i32, right as i32, false)),
+            Operator::Range    => ResolvedExpression::Value($span, executor::create_range(left.into(), right.into(), true)),
+            Operator::RangeLT  => ResolvedExpression::Value($span, executor::create_range(left.into(), right.into(), false)),
             op => return Err(CompileError::InvalidBinaryOp { span: $span, operator: op, left: left.into(), right: right.into() }),
         }
     }};
@@ -613,11 +614,12 @@ pub struct Analyzer{
     pub namespace_scopes: HashMap<u32, ScopeId>,
     pub namespace_static_info: HashMap<ShapeId, (StaticInfo, Vec<AzimuthId>)>,
 
-    pub azimuths: HashMap<u32, AzimuthInfo>,
-    pub shapes: HashMap<u32, ShapeInfo>,
+    pub azimuths: HashMap<AzimuthId, AzimuthInfo>,
+    pub shapes: HashMap<ShapeId, ShapeInfo>,
+    pub primitive_shapes: HashMap<Identifier, ShapeId>,
 
-    pub next_scope_id: u32,
-    pub next_local_id: u32,
+    pub next_scope_id: ScopeId,
+    pub next_local_id: LocalId,
 }
 
 impl Analyzer {
@@ -639,6 +641,7 @@ impl Analyzer {
             namespace_static_info: HashMap::new(),
             azimuths: HashMap::new(),
             shapes: HashMap::new(),
+            primitive_shapes:HashMap::new(),
         }
     }
 
@@ -884,7 +887,7 @@ impl Analyzer {
                         }
                         other => {
                             println!("ASSSSS its a {:?}", other);
-                            let shape = self.get_primitive_shape(other)?.unwrap();
+                            let shape = self.get_primitive_shape(other, &span)?.unwrap();
                             shape.name.clone()
                         }
                     };
@@ -924,7 +927,7 @@ impl Analyzer {
             ValueKind::String | ValueKind::Bool | ValueKind::Array(_) 
             | ValueKind::Set(_)  | ValueKind::Dict(_,_) 
             | ValueKind::Number(_) | ValueKind::Range(_) => {
-                let name = match self.get_primitive_shape(target_kind)? {
+                let name = match self.get_primitive_shape(target_kind, &span)? {
                     Some(info) => info.name.clone(),
                     None => return Err(CompileError::UndefinedSymbol { span, name: member })
                 };
@@ -1212,7 +1215,7 @@ impl Analyzer {
 
                     // Int Optimization
                     ResolvedExpression::Value(span, Value::Number(val)) => {
-                        let val = val.to_i32();
+                        let val = val.to_i64().unwrap();
                         match operator {
                             Operator::Inc => ResolvedExpression::Value(span, (val + 1).into()),
                             Operator::Dec => ResolvedExpression::Value(span, (val - 1).into()),
@@ -1224,25 +1227,25 @@ impl Analyzer {
 
                     // String Optimization
                     ResolvedExpression::Value(span, Value::String(val)) => match operator {
-                        Operator::Len => ResolvedExpression::Value(span, (val.len() as i32).into()),
+                        Operator::Len => ResolvedExpression::Value(span, (val.chars().count() as u64).into()),
                         operator => return Err(CompileError::InvalidUnaryOp { span, operator, operand:val.into()}),
                     },
 
                     // Array Optimization
                     ResolvedExpression::Value(span, Value::Array(vec, kind)) => match operator {
-                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as i32).into()),
+                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as u64).into()),
                         operator => return Err(CompileError::InvalidUnaryOp { span, operator, operand:Value::Array(vec, kind)}),
                     },
 
                     // Set Optimization
                     ResolvedExpression::Value(span, Value::Set(vec, kind)) => match operator {
-                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as i32).into()),
+                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as u64).into()),
                         operator => return Err(CompileError::InvalidUnaryOp { span, operator, operand:Value::Set(vec, kind)}),
                     },
 
                     // Dict Optimization
                     ResolvedExpression::Value(span, Value::Dict(vec, key_kind, val_kind)) => match operator {
-                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as i32).into()),
+                        Operator::Len => ResolvedExpression::Value(span, (vec.len() as u64).into()),
                         operator => return Err(CompileError::InvalidUnaryOp { span, operator, operand:Value::Dict(vec, key_kind, val_kind)}),
                     },
 
@@ -1268,16 +1271,17 @@ impl Analyzer {
                     ResolvedExpression::Value(_, Value::Number(right))) => {
                         let kind = Number::promote_kind(left.num_kind(), right.num_kind());
                         match kind {
-                            NumKind::Float64 => float_binop!(span, left.to_f64(), right.to_f64(), operator, f64),
-                            NumKind::Float32 => float_binop!(span, left.to_f32(), right.to_f32(), operator, f32),
-                            NumKind::UInt64  => numeric_binop!(span, left.to_u64(), right.to_u64(), operator, u64),
-                            NumKind::Int64   => numeric_binop!(span, left.to_i64(), right.to_i64(), operator, i64),
-                            NumKind::UInt32  => numeric_binop!(span, left.to_u32(), right.to_u32(), operator, u32),
-                            NumKind::Int32   => numeric_binop!(span, left.to_i32(), right.to_i32(), operator, i32),
-                            NumKind::UInt16  => numeric_binop!(span, left.to_u16(), right.to_u16(), operator, u16),
-                            NumKind::Int16   => numeric_binop!(span, left.to_i16(), right.to_i16(), operator, i16),
-                            NumKind::UInt8  => numeric_binop!(span, left.to_u8(), right.to_u8(), operator, u8),
-                            NumKind::Int8   => numeric_binop!(span, left.to_i8(), right.to_i8(), operator, i8),
+                            NumKind::Float64 => float_binop!(span, left.to_f64().unwrap(), right.to_f64().unwrap(), operator, f64),
+                            NumKind::Float32 => float_binop!(span, left.to_f32().unwrap(), right.to_f32().unwrap(), operator, f32),
+                            NumKind::UInt64  => numeric_binop!(span, left.to_u64().unwrap(), right.to_u64().unwrap(), operator, u64),
+                            NumKind::Int64   => numeric_binop!(span, left.to_i64().unwrap(), right.to_i64().unwrap(), operator, i64),
+                            NumKind::UInt32  => numeric_binop!(span, left.to_u32().unwrap(), right.to_u32().unwrap(), operator, u32),
+                            NumKind::Int32   => numeric_binop!(span, left.to_i32().unwrap(), right.to_i32().unwrap(), operator, i32),
+                            NumKind::UInt16  => numeric_binop!(span, left.to_u16().unwrap(), right.to_u16().unwrap(), operator, u16),
+                            NumKind::Int16   => numeric_binop!(span, left.to_i16().unwrap(), right.to_i16().unwrap(), operator, i16),
+                            NumKind::UInt8  => numeric_binop!(span, left.to_u8().unwrap(), right.to_u8().unwrap(), operator, u8),
+                            NumKind::Int8   => numeric_binop!(span, left.to_i8().unwrap(), right.to_i8().unwrap(), operator, i8),
+                            NumKind::Any   => numeric_binop!(span, left.to_i32().unwrap(), right.to_i32().unwrap(), operator, i32),
                             _ => panic!("Couldnt do number conversion")
                         }
                     }
@@ -1350,10 +1354,11 @@ impl Analyzer {
                 let (access_kind, value_kind) = match target.kind() {
                     ValueKind::Array(kind) => (ValueKind::Number(NumKind::Any), *kind),
                     ValueKind::Dict(k_kind,v_kind) => (*k_kind, *v_kind),
+                    ValueKind::String => (ValueKind::Number(NumKind::Any),ValueKind::String),
                     other => return Err(CompileError::Error{span, message:format!("Array access not permitted for {:?}", other)}),
                 };
 
-                let access = self.resolve_expression(*index, scope, Some(ValueKind::Number(NumKind::Any)))?;
+                let access = self.resolve_expression(*index, scope, Some(access_kind.clone()))?;
 
                 if !access.kind().is_assignable_from(access_kind.clone()) {
                     return Err(CompileError::TypeMismatch { span, expected:access_kind, found: access.kind(), loc:format!("array access") });
@@ -1407,10 +1412,27 @@ impl Analyzer {
 
                 let mut resolved_inputs = Vec::new();
                 for i in 0..input_types.len() {
+
                     let input = &input_types[i];
 
                     let value_type = match &input.value_type {
-                        Some(kind) => self.resolve_shape_expression(kind.clone(), scope)?.kind(),
+                        Some(kind) => {
+                            let kind = self.resolve_shape_expression(kind.clone(), scope)?;
+                            match kind {
+                                ResolvedShapeExpression::Simple(span, shape) => {
+                                    let mut kind = ResolvedShapeExpression::Simple(span.clone(), shape.clone()).kind();
+                                    for (prim_id, shape_id) in &self.primitive_shapes {
+                                        if *shape_id == shape.id {
+                                            println!("[{:?}] Primitive found: {:?} with inst {:?}", span, prim_id, shape);
+                                            kind = Self::shape_name_to_kind(prim_id, shape.generics.iter().map(|k|k.kind()).collect());
+                                            break
+                                        }
+                                    }
+                                    kind
+                                }
+                                other=>other.kind()
+                            }
+                        }
                         None => match &known_type {
                             Some(ValueKind::Function(sig)) => {
                                 match sig.input_types.get(i) {
@@ -1484,6 +1506,13 @@ impl Analyzer {
 
         match known_type {
             None => {},
+            Some(ValueKind::Number(num_kind)) => {
+                match resolved {
+                    ResolvedExpression::Value(span, Value::Number(num)) => 
+                        return Ok(ResolvedExpression::Value(span,num.to(num_kind).unwrap().into())),
+                    _ => {}
+                }
+            }
             Some(kind) => if !resolved.kind().is_assignable_from(kind.clone()) {
                 //return Err(CompileError::TypeMismatch { span: Span::default(), expected:kind, found:resolved.kind(), loc: format!("") })
             }
@@ -1529,6 +1558,24 @@ impl Analyzer {
 
                 let mut input_types = Vec::new();
                 for input in signature.input_types {
+                    if signature.has_self && input_types.len() == 0 { 
+                        // Self
+                        match self.resolve_shape_expression(input, scope)? {
+                            ResolvedShapeExpression::Simple(span, shape) => {
+                                let mut kind = ResolvedShapeExpression::Simple(span, shape.clone()).kind();
+                                for (prim_id, shape_id) in &self.primitive_shapes {
+                                    if *shape_id == shape.id {
+                                        kind = Self::shape_name_to_kind(prim_id, shape.generics.iter().map(|k|k.kind()).collect());
+                                        break
+                                    }
+                                }
+                                input_types.push(kind)
+                            }
+                            _ => todo!()
+                        }
+
+                        continue 
+                    }
                     input_types.push(self.resolve_shape_expression(input, scope)?.kind())
                 }
 
@@ -1755,7 +1802,7 @@ impl Analyzer {
 
                 let value = self.resolve_expression(value, scope, Some(target.kind()))?;
 
-                if !target.kind().is_assignable_from(value.kind()) {
+                if !value.kind().is_assignable_from(target.kind()) {
                     return Err(CompileError::TypeMismatch { span, expected: target.kind(), found: value.kind(), loc:format!("value assignment") })
                 }
 
@@ -1798,23 +1845,54 @@ impl Analyzer {
         }
     }
 
-    fn get_primitive_shape(&self, kind: &ValueKind) -> Result<Option<&ShapeInfo>, CompileError> {
-        for shape in self.shapes.values() {
-            if shape.name.ends_with(match kind {
-                ValueKind::Number(NumKind::Int32) => "::Int32",
-                ValueKind::Bool => "::Bool",
-                ValueKind::String => "::String",
-                ValueKind::Array(_) => "::Array",
-                ValueKind::Set(_) => "::Set",
-                ValueKind::Dict(_,_) => "::Dict",
-                ValueKind::Range(_) => "::Range",
-                ValueKind::Object(_) => "::Object",
-                _ => todo!()
-            }) {
-                return Ok(Some(shape))
-            }
+    fn kind_to_shape_name(kind: &ValueKind) -> Identifier {
+        use ValueKind::*;
+        match kind {
+            Number(NumKind::Int32) => "Int32",
+            Bool => "Bool",
+            String => "String",
+            Array(_) => "Array",
+            Set(_) => "Set",
+            Dict(_,_) => "Dict",
+            Range(_) => "Range",
+            Object(_) => "Object",
+            _ => todo!()
+        }.to_string()
+    }
+
+    fn shape_name_to_kind(name: &Identifier, generics: Vec<ValueKind>) -> ValueKind {
+        use ValueKind::*;
+        match name.as_str() {
+            "Int32" => Number(NumKind::Int32),
+            "Bool" => Bool,
+            "String" => String,
+            "Array" => Array(Box::new(generics[0].clone())),
+            "Set" => Set(Box::new(generics[0].clone())),
+            "Dict" => Dict(Box::new(generics[0].clone()),Box::new(generics[1].clone())),
+            "Range" => Range(NumKind::Any),
+            "Object" => Object(Vec::new()),
+            _ => todo!()
         }
-        Ok(None)
+    }
+
+    fn get_primitive_shape(&self, kind: &ValueKind, span:&Span) -> Result<Option<&ShapeInfo>, CompileError> {
+        let name = Self::kind_to_shape_name(kind);
+
+        match self.primitive_shapes.get(&name) {
+            Some(found) => Ok(self.shapes.get(found)),
+            None => Err(CompileError::Error{span:span.clone(), message:format!("Primitive intrinsic not found for {}", name)})
+        }
+    }
+
+    fn resolve_annotation(&mut self, annotation:Annotation, scope:ScopeId) -> Result<Vec<ResolvedExpression>, CompileError> {
+        let mut resolved = Vec::new();
+        let params = annotation.kind.params();
+        for i in 0..params.len() {
+            let arg = annotation.args[i].clone();
+            let param = params[i].clone();
+            resolved.push(self.resolve_expression(arg, scope, Some(param))?);
+        }
+        Ok(resolved)
     }
 
     fn resolve_namespace_headers(&mut self, namespace: Namespace, scope: ScopeId) -> Result<(), CompileError> {
@@ -1873,6 +1951,22 @@ impl Analyzer {
                 println!("Loading shape id {}: {:?}", namespace.id, namespace.name);
             }
         }
+
+        for annotation in namespace.annotations {
+            match annotation.kind {
+                AnnotationKind::Lang => {
+                    let resolved = self.resolve_annotation(annotation, 0)?;
+                    match &resolved[0] {
+                        ResolvedExpression::Value(_,Value::String(identifier)) => {
+                            self.primitive_shapes.insert(identifier.clone(), namespace.id);
+                        }
+                        _ => return Err(CompileError::Error{span:namespace.span, message:format!("How could this happen to me i made a mistake")})
+                    }
+                }
+                _ => {}
+            }
+        }
+
         for child_name in &namespace.children {
             let child = self.loader.get_single_namespace(namespace.span.clone(), child_name)?.clone();
             self.resolve_namespace_headers(child, scope_id)?;

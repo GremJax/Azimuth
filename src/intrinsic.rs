@@ -32,7 +32,7 @@ fn array_insert(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
 
     match (array_member, index) {
         (Value::Pointer(obj, az, _), Value::Number(num)) => {
-            input.runtime.insert_array_element(*obj, *az, num.to_i32() as usize, add.clone());
+            input.runtime.insert_array_element(*obj, *az, num.to_i32().unwrap() as usize, add.clone());
             Ok(true.into())
         }
         (other, index) => Err(RuntimeError::TypeMismatch{span:input.span, found: other.clone(), expected: ValueKind::Array(Box::new(ValueKind::None)) }),
@@ -45,7 +45,7 @@ fn array_remove(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
 
     match (array_member, index) {
         (Value::Pointer(obj, az, _), Value::Number(num)) => {
-            input.runtime.remove_array_element(*obj, *az, num.to_i32() as usize);
+            input.runtime.remove_array_element(*obj, *az, num.to_i32().unwrap() as usize);
             Ok(true.into())
         }
         (other, index) => Err(RuntimeError::TypeMismatch{span:input.span, found: other.clone(), expected: ValueKind::Array(Box::new(ValueKind::None)) }),
@@ -93,7 +93,7 @@ fn random_range(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
 
     match (to, from) {
         (Value::Number(to), Value::Number(from)) => {
-            let random: i32 = rng.gen_range(from.to_i32()..=to.to_i32());
+            let random: i32 = rng.gen_range(from.to_i32().unwrap()..=to.to_i32().unwrap());
             Ok(random.into())
         }
         _ => Err(RuntimeError::TypeMismatch{span:input.span, found: to.clone(), expected: ValueKind::Number(NumKind::Any) })
@@ -136,7 +136,7 @@ fn benchmarking_get_time(input: IntrinsicParameters) -> Result<Value, RuntimeErr
 fn range_to_array(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
     let val = &input.args[0];
     let (from, to, by, inclusive) = match val {
-        Value::Range(from, to, by, inclusive, _) => (from.to_i32(), to.to_i32(), by.to_i32(), *inclusive),
+        Value::Range(from, to, by, inclusive, _) => (from.to_i32().unwrap(), to.to_i32().unwrap(), by.to_i32().unwrap(), *inclusive),
         other => return Err(RuntimeError::TypeMismatch{span:input.span, found:other.clone(), expected: ValueKind::Range(NumKind::Any) })
     };
 

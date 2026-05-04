@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, analyzer::CompileError, lexer::{self, Span}, parser::{self, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
+use crate::{AzimuthFlags, analyzer::CompileError, lexer::{self, Span}, parser::{self, Annotation, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
 
 #[derive(Debug, Clone)]
 pub enum LoadError {
@@ -58,6 +58,7 @@ pub struct Namespace {
     pub azimuths: Vec<LoadedAzimuth>,
     pub dependencies: Vec<NamespaceId>,
     pub aliases: Vec<(Identifier, ShapeExpression)>,
+    pub annotations: Vec<Annotation>,
 }
 
 impl Namespace {
@@ -125,6 +126,7 @@ impl Loader {
             azimuths: Vec::new(),
             dependencies: Vec::new(),
             aliases: Vec::new(),
+            annotations: Vec::new(),
         };
         Loader { 
             source_dir: source_dir.to_string(),
@@ -203,7 +205,7 @@ impl Loader {
                 Statement::Alias { new, target, .. } => {
                     aliases.push((new, target));
                 }
-                Statement::DeclareShape { span, name, slot_ids, parents, generics, extension, .. } => {
+                Statement::DeclareShape { span, name, slot_ids, parents, generics, extension, annotations, .. } => {
                     let name = format!("{}::{}", identifier, name);
                     let azimuths: Vec<LoadedAzimuth> = slot_ids.iter()
                         .map(|raw| LoadedAzimuth{
@@ -221,7 +223,8 @@ impl Loader {
                         children:Vec::new(), 
                         dependencies:dependencies.clone(),
                         aliases:Vec::new(),
-                        azimuths 
+                        azimuths,
+                        annotations
                     };
                     
                     if extension {
@@ -260,7 +263,7 @@ impl Loader {
                 _ => {}
             }
         }
-        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies, aliases};
+        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies, aliases, annotations:Vec::new()};
         self.namespaces.push(namespace.clone());
         Ok(namespace)
     }

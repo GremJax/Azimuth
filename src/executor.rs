@@ -59,8 +59,8 @@ macro_rules! numeric_binop {
             Operator::BWShiftL => Ok((left << right).into()),
             Operator::BWShiftR => Ok((left >> right).into()),
             
-            Operator::Range => Ok(create_range(left as i32, right as i32, true)),
-            Operator::RangeLT => Ok(create_range(left as i32, right as i32, false)),
+            Operator::Range => Ok(create_range(left.into(), right.into(), true)),
+            Operator::RangeLT => Ok(create_range(left.into(), right.into(), false)),
             
             operator => Err(RuntimeError::InvalidOperator { span:$span, operator, operand: ValueKind::Number(NumKind::Any) }),
         }
@@ -248,7 +248,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Bool })
                     },
                 (op, Value::Number(val)) => {
-                    let val = val.to_i32();
+                    let val = val.to_i64().unwrap();
                     match op {
                         Operator::Inc => Ok((val + 1).into()),
                         Operator::Dec => Ok((val - 1).into()),
@@ -259,22 +259,22 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                 },
                 (op, Value::String(val)) => 
                     match op {
-                        Operator::Len => Ok((val.len() as i32).into()),
+                        Operator::Len => Ok((val.chars().count() as u64).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::String })
                     },
                 (op, Value::Array(vec, val)) => 
                     match op {
-                        Operator::Len => Ok((vec.len() as i32).into()),
+                        Operator::Len => Ok((vec.len() as u64).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Array(Box::new(val)) })
                     },
                 (op, Value::Set(vec, val)) => 
                     match op {
-                        Operator::Len => Ok((vec.len() as i32).into()),
+                        Operator::Len => Ok((vec.len() as u64).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Set(Box::new(val)) })
                     },
                 (op, Value::Dict(vec, key, val)) => 
                     match op {
-                        Operator::Len => Ok((vec.len() as i32).into()),
+                        Operator::Len => Ok((vec.len() as u64).into()),
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand:ValueKind::Dict(Box::new(key),Box::new(val)) })
                     },
 
@@ -331,17 +331,18 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                     };
                     let kind = Number::promote_kind(left.num_kind(), right.num_kind());
                     match kind {
-                        NumKind::Float64 => float_binop!(span, left.to_f64(), right.to_f64(), op, f64),
-                        NumKind::Float32 => float_binop!(span, left.to_f32(), right.to_f32(), op, f32),
-                        NumKind::UInt64  => numeric_binop!(span, left.to_u64(), right.to_u64(), op, u64),
-                        NumKind::Int64   => numeric_binop!(span, left.to_i64(), right.to_i64(), op, i64),
-                        NumKind::UInt32  => numeric_binop!(span, left.to_u32(), right.to_u32(), op, u32),
-                        NumKind::Int32   => numeric_binop!(span, left.to_i32(), right.to_i32(), op, i32),
-                        NumKind::UInt16  => numeric_binop!(span, left.to_u16(), right.to_u16(), op, u16),
-                        NumKind::Int16   => numeric_binop!(span, left.to_i16(), right.to_i16(), op, i16),
-                        NumKind::UInt8  => numeric_binop!(span, left.to_u8(), right.to_u8(), op, u8),
-                        NumKind::Int8   => numeric_binop!(span, left.to_i8(), right.to_i8(), op, i8),
-                        _ => panic!("Couldnt do number conversion")
+                        NumKind::Float64 => float_binop!(span, left.to_f64().unwrap(), right.to_f64().unwrap(), op, f64),
+                        NumKind::Float32 => float_binop!(span, left.to_f32().unwrap(), right.to_f32().unwrap(), op, f32),
+                        NumKind::UInt64  => numeric_binop!(span, left.to_u64().unwrap(), right.to_u64().unwrap(), op, u64),
+                        NumKind::Int64   => numeric_binop!(span, left.to_i64().unwrap(), right.to_i64().unwrap(), op, i64),
+                        NumKind::UInt32  => numeric_binop!(span, left.to_u32().unwrap(), right.to_u32().unwrap(), op, u32),
+                        NumKind::Int32   => numeric_binop!(span, left.to_i32().unwrap(), right.to_i32().unwrap(), op, i32),
+                        NumKind::UInt16  => numeric_binop!(span, left.to_u16().unwrap(), right.to_u16().unwrap(), op, u16),
+                        NumKind::Int16   => numeric_binop!(span, left.to_i16().unwrap(), right.to_i16().unwrap(), op, i16),
+                        NumKind::UInt8  => numeric_binop!(span, left.to_u8().unwrap(), right.to_u8().unwrap(), op, u8),
+                        NumKind::Int8   => numeric_binop!(span, left.to_i8().unwrap(), right.to_i8().unwrap(), op, i8),
+                        NumKind::Any   => numeric_binop!(span, left.to_i32().unwrap(), right.to_i32().unwrap(), op, i32),
+                        _ => return Err(RuntimeError::Error{span:span.clone(), message:format!("Couldnt do number conversion: {:?} to {:?}", left, right)})
                     }
                 }
                     
@@ -426,24 +427,32 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
 
             match (target, index) {
                 (Value::Array(array, _), Value::Number(index)) => {
-                    match array.get(index.to_i32() as usize) {
+                    let index = index.to_i64().unwrap();
+                    let i = if index < 0 {
+                        ((array.len() as i64) + index) as usize
+                    } else { index as usize };
+
+                    match array.get(i) {
                         Some(value) => Ok(value.clone()),
                         None if optional => Ok(Value::None),
-                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, array.len() - 1)}),
+                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds (len of {})", index, array.len())}),
                     }
                 }
                 (Value::String(string), Value::Number(index)) => {
-                    match string.as_bytes().get(index.to_i32() as usize) {
-                        Some(value) => Ok(Value::String(format!("{}",*value as char))),
+                    //println!("Accessing string: {}", string);
+                    let chars: Vec<String> = string.chars().map(|k|k.to_string()).collect();
+                    match chars.get(index.to_u64().unwrap() as usize) {
+                        Some(value) => Ok(value.clone().into()),
                         None if optional => Ok(Value::None),
-                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, string.len() - 1)}),
+                        None => return Err(RuntimeError::Error{span, message:format!("Index {:?} out of bounds ({:?})", index, string.chars().count() - 1)}),
                     }
                 }
-                (Value::Range(start, end, by, inclusive, _), Value::Number(index)) => {
-                    let start = start.to_i32();
-                    let end = end.to_i32();
-                    let by = by.to_i32();
-                    let index = index.to_i32();
+                (Value::Range(start, end, by, inclusive, kind), Value::Number(index)) => {
+                    //println!("GOD IS GOOD");
+                    let start = start.to_i32().unwrap();
+                    let end = end.to_i32().unwrap();
+                    let by = by.to_i32().unwrap();
+                    let index = index.to_i32().unwrap();
 
                     let num = start + (by * index);
                     if (inclusive && num >= end) || num > end {
@@ -585,7 +594,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                             // Remove from stack
                             runtime.call_stack.pop();
 
-                            Ok(value.convert_to(func.output_type))
+                            Ok(value.convert_to(func.output_type).unwrap())
                         },
                         ExecFlow::Normal(span) => {
                             if expected_return != ValueKind::None {
@@ -675,9 +684,17 @@ pub fn evaluate_place(runtime: &mut Runtime, expression:ResolvedExpression) -> R
     }
 }
 
-pub fn create_range(from: i32, to: i32, inclusive: bool) -> Value {
-    let by = if from <= to { 1 } else { -1 }; 
-    Value::Range(Number::Int32(from), Number::Int32(to), Number::Int32(by), inclusive, NumKind::Int32)
+pub fn create_range(from: Number, to: Number, inclusive: bool) -> Value {
+    let kind = from.num_kind();
+    let by = match kind {
+        NumKind::Int8 | NumKind::Int16 | NumKind::Int32 | NumKind::Int64 => {
+            let from = from.to_i64();
+            let to = to.to_i64();
+            if from <= to { 1 } else { -1 }
+        }
+        _ => 1,
+    };
+    Value::Range(from, to, Number::Any(by.into()), inclusive, kind)
 }
 
 pub fn execute(runtime: &mut Runtime, ast: Vec<ResolvedStatement>, static_info: HashMap<ShapeId, (StaticInfo, Vec<AzimuthId>)>) -> Result<ExecFlow, RuntimeError> {
@@ -908,15 +925,28 @@ pub fn execute_statement(runtime: &mut Runtime, statement: ResolvedStatement) ->
                     string.into_bytes().into_iter()
                         .map(|c| Value::String((c as char).to_string()))
                 ),
-                Value::Range(start, end, by, inclusive, _) => {
-                    let (start, end, by) = (start.to_i32(), end.to_i32(), by.to_i32());
-                    let range: Box<dyn Iterator<Item = i32>> = match (inclusive, start <= end) {
-                        (true,  true)  => Box::new((start..=end).step_by(by as usize)),
-                        (true,  false) => Box::new((0..=(start - end) / -by).map(move |i| start + i * by)),
-                        (false, true)  => Box::new((start..end).step_by(by as usize)),
-                        (false, false) => Box::new((0..(start - end) / -by).map(move |i| start + i * by)),
-                    };
-                    Box::new(range.map(|n| Value::Number(Number::Int32(n))))
+                Value::Range(start, end, by, inclusive, kind) => {
+                    match kind {
+                        NumKind::UInt8 | NumKind::UInt16 | NumKind::UInt32 | NumKind::UInt64 => {
+                            let (start, end, by) = (start.to_u64().unwrap(), end.to_u64().unwrap(), by.to_u64().unwrap());
+                            let range: Box<dyn Iterator<Item = u64>> = match inclusive {
+                                true => Box::new((start..=end).step_by(by as usize)),
+                                false => Box::new((start..end).step_by(by as usize)),
+                            };
+                            Box::new(range.map(|n| n.into()))
+                        }
+                        _ => {
+                            let (start, end, by) = (start.to_i64().unwrap(), end.to_i64().unwrap(), by.to_i64().unwrap());
+                            let range: Box<dyn Iterator<Item = i64>> = match (inclusive, start <= end) {
+                                (true,  true)  => Box::new((start..=end).step_by(by as usize)),
+                                (true,  false) => Box::new((0..=(start - end) / -by).map(move |i| start + i * by)),
+                                (false, true)  => Box::new((start..end).step_by(by as usize)),
+                                (false, false) => Box::new((0..(start - end) / -by).map(move |i| start + i * by)),
+                            };
+                            Box::new(range.map(|n| n.into()))
+                        }
+                    }
+                    
                 },
                 other => return Err(RuntimeError::Error { span,
                     message: format!("{:?} is not iterable", other)

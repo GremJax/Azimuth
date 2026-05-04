@@ -1,5 +1,6 @@
 print "loading standard library..."
 
+#Lang("Object")
 shape Object {} 
 
 namespace Math {
@@ -181,27 +182,31 @@ shape Linked<T> {
         return self.Next != null
 }
 
+#Lang("Array")
 shape Array<T> {
     Len() -> uint64 return len self
-    //ToArray() -> [T] return self
+    ToArray() -> [T] return self
 
     intrinsic Append(item T) -> bool
     intrinsic Add(item T, index uint64) -> bool
     intrinsic Remove(index uint64) -> bool
 
     Contains(item T) -> bool {
-        //for i in self
-        //    if i == item return true
+        for i in self
+            if i == item return true
         return false
     }
     
     RemoveValue(item T) -> bool {
-        //for i in self
-        //    if i == item return self.Remove(i)
+        for i in 0 ..< self.Len() {
+            if self[i] == item 
+                return self.Remove(i)
+        }
         return false
     }
 }
 
+#Lang("Range")
 shape Range {
     intrinsic ToArray() -> [int]
 
@@ -209,6 +214,7 @@ shape Range {
     intrinsic CreateExclusive(start int, end int, by int) -> range
 }
 
+#Lang("Set")
 shape Set<T> {
     Len() -> uint64 return len self
     intrinsic ToArray() -> [T]
@@ -218,6 +224,7 @@ shape Set<T> {
     intrinsic Contains(item T) -> bool
 }
 
+#Lang("Dict")
 shape Dict<K, V> {
     Len() -> uint64 return len self
     
@@ -286,13 +293,15 @@ shape Benchmarking {
     }
 }
 
+#Lang("Int32")
 shape Int32 {
     static const MAX int32 = 2147483647
-    static const MIN int32 = -2147483648
+    //static const MIN int32 = -2147483648
 
     Negate() -> int32 return -self
 }
 
+#Lang("Bool")
 shape Bool {
     static Eq(x bool, y bool) -> bool
         return x == y
@@ -320,14 +329,14 @@ shape Bool {
         }
 }
 
+#Lang("String")
 shape String {
     Len() -> uint64 return len self
 
-/*
     StartsWith(substring string) -> bool {
         if self.Len() < substring.Len() return false
 
-        for i in 0 ... substring.Len() 
+        for i in 0 ..< substring.Len() 
             if self[i] != substring[i] return false
 
         return true
@@ -335,14 +344,13 @@ shape String {
     EndsWith(substring string) -> bool {
         if self.Len() < substring.Len() return false
 
-        for i in 0 ... substring.Len() {
+        for i in 0 ..< substring.Len() {
             let index = self.Len() - i - 1
             if self[index] != substring[index] return false
         }
             
         return true
     }
-*/
 
     intrinsic Upper() -> string
     intrinsic Lower() -> string

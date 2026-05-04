@@ -11,6 +11,8 @@ shape Counter : Named {
         self.Value += self.Step
         return self.Value
     }
+
+    Add(count int) self.Value += count
 }
 
 shape PrintThing {
@@ -48,3 +50,4 @@ print obj.Id
 
 print obj
 
+print "BobJimmy".StartsWith("Bob")

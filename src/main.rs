@@ -92,13 +92,13 @@ impl ValueKind {
                 for shape in k {
                     if shape.is_assignable_from(other.clone()) { return true }
                 }
-                false
+                k.is_empty()
             }
             ValueKind::Generic(_, k) => {
                 for shape in k {
                     if shape.is_assignable_from(other.clone()) { return true }
                 }
-                false
+                k.is_empty()
             }
             ValueKind::Local(k) => k.is_assignable_from(other),
             ValueKind::Pointer(k) => k.is_assignable_from(other),
@@ -185,119 +185,129 @@ impl Number {
         }
     }
 
-    fn to(&self, kind:NumKind) -> Number {
+    fn to(&self, kind:NumKind) -> Option<Number> {
         use NumKind::*;
         match kind {
-            UInt8 => Number::UInt8(self.to_u8()),
-            UInt16 => Number::UInt16(self.to_u16()),
-            UInt32 => Number::UInt32(self.to_u32()),
-            UInt64 => Number::UInt64(self.to_u64()),
-            Int8 => Number::Int8(self.to_i8()),
-            Int16 => Number::Int16(self.to_i16()),
-            Int32 => Number::Int32(self.to_i32()),
-            Int64 => Number::Int64(self.to_i64()),
-            Float32 => Number::Float32(self.to_f32().into()),
-            Float64 => Number::Float64(self.to_f64().into()),
-            _ => self.clone()
+            UInt8 => match self.to_u8() { None => None, Some(val) => Some(val.into()) },
+            UInt16 => match self.to_u16() { None => None, Some(val) => Some(val.into()) },
+            UInt32 => match self.to_u32() { None => None, Some(val) => Some(val.into()) },
+            UInt64 => match self.to_u64() { None => None, Some(val) => Some(val.into()) },
+            Int8 => match self.to_i8() { None => None, Some(val) => Some(val.into()) },
+            Int16 => match self.to_i16() { None => None, Some(val) => Some(val.into()) },
+            Int32 => match self.to_i32() { None => None, Some(val) => Some(val.into()) },
+            Int64 => match self.to_i64() { None => None, Some(val) => Some(val.into()) },
+            Float32 => match self.to_f32() { None => None, Some(val) => Some(val.into()) },
+            Float64 => match self.to_f64() { None => None, Some(val) => Some(val.into()) },
+            _ => Some(self.clone())
         }
     }
 
-    fn to_u8(&self) -> u8 {
+    fn to_u8(&self) -> Option<u8> {
         match self {
-            Number::UInt8(val) => *val,
+            Number::Any(val) => (val.into_inner() as u8).into(),
+            Number::UInt8(val) => Some(*val),
             num => panic!("{:?} not convertible to uint8", num),
         }
     }
 
-    fn to_i8(&self) -> i8 {
+    fn to_i8(&self) -> Option<i8> {
         match self {
-            Number::Int8(val) => *val,
+            Number::Any(val) => (val.into_inner() as i8).into(),
+            Number::Int8(val) => Some(*val),
             num => panic!("{:?} not convertible to int8", num),
         }
     }
 
-    fn to_u16(&self) -> u16 {
+    fn to_u16(&self) -> Option<u16> {
         match self {
-            Number::UInt16(val) => *val,
-            Number::UInt8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to uint16", num),
+            Number::Any(val) => (val.into_inner() as u16).into(),
+            Number::UInt16(val) => Some(*val),
+            Number::UInt8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_i16(&self) -> i16 {
+    fn to_i16(&self) -> Option<i16> {
         match self {
-            Number::Int16(val) => *val,
-            Number::UInt8(val) => (*val).into(),
-            Number::Int8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to int16", num),
+            Number::Any(val) => (val.into_inner() as i16).into(),
+            Number::Int16(val) => Some(*val),
+            Number::UInt8(val) => Some((*val).into()),
+            Number::Int8(val) => Some((*val).into()),
+            _ => None
         }
     }
 
-    fn to_u32(&self) -> u32 {
+    fn to_u32(&self) -> Option<u32> {
         match self {
-            Number::UInt32(val) => *val,
-            Number::UInt16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to uint32", num),
+            Number::Any(val) => (val.into_inner() as u32).into(),
+            Number::UInt32(val) => Some(*val),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_i32(&self) -> i32 {
+    fn to_i32(&self) -> Option<i32> {
         match self {
-            Number::Int32(val) => *val,
-            Number::UInt16(val) => (*val).into(),
-            Number::Int16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            Number::Int8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to int32", num),
+            Number::Any(val) => (val.into_inner() as i32).into(),
+            Number::Int32(val) => Some(*val),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::Int16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            Number::Int8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_u64(&self) -> u64 {
+    fn to_u64(&self) -> Option<u64> {
         match self {
-            Number::UInt64(val) => *val,
-            Number::UInt32(val) => (*val).into(),
-            Number::UInt16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to uint64", num),
+            Number::Any(val) => (val.into_inner() as u64).into(),
+            Number::UInt64(val) => Some(*val),
+            Number::UInt32(val) => Some((*val).into()),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_i64(&self) -> i64 {
+    fn to_i64(&self) -> Option<i64> {
         match self {
-            Number::Int64(val) => *val,
-            Number::UInt32(val) => (*val).into(),
-            Number::Int32(val) => (*val).into(),
-            Number::UInt16(val) => (*val).into(),
-            Number::Int16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            Number::Int8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to int64", num),
+            Number::Any(val) => (val.into_inner() as i64).into(),
+            Number::Int64(val) => Some(*val),
+            Number::UInt32(val) => Some((*val).into()),
+            Number::Int32(val) => Some((*val).into()),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::Int16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            Number::Int8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_f32(&self) -> f32 {
+    fn to_f32(&self) -> Option<f32> {
         match self {
-            Number::Float32(val) => (*val).into(),
-            Number::UInt16(val) => (*val).into(),
-            Number::Int16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            Number::Int8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to float32", num),
+            Number::Any(val) => (val.into_inner() as f32).into(),
+            Number::Float32(val) => Some((*val).into()),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::Int16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            Number::Int8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
-    fn to_f64(&self) -> f64 {
+    fn to_f64(&self) -> Option<f64> {
         match self {
-            Number::Float64(val) => (*val).into(),
-            Number::Float32(val) => (Number::Float32(*val)).to_f32().into(),
-            Number::UInt32(val) => (*val).into(),
-            Number::Int32(val) => (*val).into(),
-            Number::UInt16(val) => (*val).into(),
-            Number::Int16(val) => (*val).into(),
-            Number::UInt8(val) => (*val).into(),
-            Number::Int8(val) => (*val).into(),
-            num => panic!("{:?} not convertible to float64", num),
+            Number::Any(val) => Some((*val).into()),
+            Number::Float64(val) => Some((*val).into()),
+            Number::Float32(val) => Some(val.into_inner().into()),
+            Number::UInt32(val) => Some((*val).into()),
+            Number::Int32(val) => Some((*val).into()),
+            Number::UInt16(val) => Some((*val).into()),
+            Number::Int16(val) => Some((*val).into()),
+            Number::UInt8(val) => Some((*val).into()),
+            Number::Int8(val) => Some((*val).into()),
+            _ => None,
         }
     }
 
@@ -305,6 +315,8 @@ impl Number {
         use NumKind::*;
 
         match (a, b) {
+            //(Any, other) | (other, Any) => other,
+
             (Float64, _) | (_, Float64) => Float64,
             (Float32, _) | (_, Float32) => Float32,
 
@@ -339,6 +351,66 @@ impl Number {
             Number::Float64(val) => format!("{}", val),
             Number::Any(val) => format!("{}", val),
         }
+    }
+}
+
+impl From<u8> for Number {
+    fn from(value: u8) -> Self {
+        Number::UInt8(value)
+    }
+}
+
+impl From<i8> for Number {
+    fn from(value: i8) -> Self {
+        Number::Int8(value)
+    }
+}
+
+impl From<u16> for Number {
+    fn from(value: u16) -> Self {
+        Number::UInt16(value)
+    }
+}
+
+impl From<i16> for Number {
+    fn from(value: i16) -> Self {
+        Number::Int16(value)
+    }
+}
+
+impl From<u32> for Number {
+    fn from(value: u32) -> Self {
+        Number::UInt32(value)
+    }
+}
+
+impl From<i32> for Number {
+    fn from(value: i32) -> Self {
+        Number::Int32(value)
+    }
+}
+
+impl From<u64> for Number {
+    fn from(value: u64) -> Self {
+        Number::UInt64(value)
+    }
+}
+
+impl From<i64> for Number {
+    fn from(value: i64) -> Self {
+        Number::Int64(value)
+    }
+}
+
+impl From<f32> for Number {
+    fn from(value: f32) -> Self {
+        Number::Float32(value.into())
+    }
+}
+
+impl From<f64> for Number {
+    fn from(value: f64) -> Self {
+        Number::Float64(value.into())
     }
 }
 
@@ -450,13 +522,12 @@ impl Value {
         }
     }
 
-    fn convert_to(&self, kind:ValueKind) -> Value {
-        use ValueKind::*;
-
+    fn convert_to(&self, kind:ValueKind) -> Option<Value> {
         match (kind, self) {
-            (Bool, Value::None) => Value::Bool(false),
-            (Number(kind), Value::Number(num)) => Value::Number(num.to(kind)),
-            _ => self.clone()
+            (ValueKind::Bool, Value::None) => Some(Value::Bool(false)),
+            (ValueKind::Number(kind), Value::Number(num)) => 
+                match num.to(kind) { None => None, Some(val) => Some(val.into())},
+            _ => Some(self.clone())
         }
     }
 }
@@ -475,67 +546,73 @@ impl From<bool> for Value {
 
 impl From<u8> for Value {
     fn from(value: u8) -> Self {
-        Value::Number(Number::UInt8(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<i8> for Value {
     fn from(value: i8) -> Self {
-        Value::Number(Number::Int8(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<u16> for Value {
     fn from(value: u16) -> Self {
-        Value::Number(Number::UInt16(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<i16> for Value {
     fn from(value: i16) -> Self {
-        Value::Number(Number::Int16(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<u32> for Value {
     fn from(value: u32) -> Self {
-        Value::Number(Number::UInt32(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<i32> for Value {
     fn from(value: i32) -> Self {
-        Value::Number(Number::Int32(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<u64> for Value {
     fn from(value: u64) -> Self {
-        Value::Number(Number::UInt64(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<i64> for Value {
     fn from(value: i64) -> Self {
-        Value::Number(Number::Int64(value))
+        Value::Number(value.into())
     }
 }
 
 impl From<f32> for Value {
     fn from(value: f32) -> Self {
-        Value::Number(Number::Float32(value.into()))
+        Value::Number(value.into())
     }
 }
 
 impl From<f64> for Value {
     fn from(value: f64) -> Self {
-        Value::Number(Number::Float64(value.into()))
+        Value::Number(value.into())
     }
 }
 
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Value::String(value)
+    }
+}
+
+impl From<Number> for Value {
+    fn from(value: Number) -> Self {
+        Value::Number(value)
     }
 }
 
@@ -580,6 +657,7 @@ pub struct AzimuthFlags {
     is_static: bool,
     is_abstract: bool,
     is_locked: bool,
+    is_private: bool,
     pub(crate) is_const: bool,
 }
 
@@ -600,7 +678,7 @@ type SlotStateId = u32;
 
 #[derive(Default, Debug, Clone)]
 struct SlotState {
-    sealed: bool,
+    //sealed: bool,
     storage: Value,
 }
 

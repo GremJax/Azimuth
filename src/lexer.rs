@@ -77,7 +77,7 @@ pub enum Keyword {
 
     // Definitions
     Shape, Let, Enum, Extension, New,
-    Static, Seal, Locked, Const, Abstract, Intrinsic,
+    Static, Seal, Locked, Const, Abstract, Intrinsic, Private,
     Before, After, Next, 
     PSelf, Default, Underscore,
     Attach, Detach,
@@ -112,7 +112,7 @@ impl fmt::Display for Span {
 #[derive(Debug, Clone)]
 pub enum TokenKind{
     Identifier(String),
-    Number(f64),
+    Number(f64, NumKind),
     Bool(bool),
     String(String),
     NoneValue,
@@ -361,7 +361,7 @@ impl Lexer {
                     i64::from_str_radix(&digits, radix).map_err(|_| ParseError::InvalidToken{span:span.clone(), token:digits})? as f64
                 };
 
-                Ok(Token{span, kind:TokenKind::Number(value)})
+                Ok(Token{span, kind:TokenKind::Number(value, kind)})
             },
             '"' => self.parse_string(chars),
             '{' => {
@@ -420,6 +420,7 @@ impl Lexer {
                     "locked" => TokenKind::Keyword(Keyword::Locked),
                     "abstract" => TokenKind::Keyword(Keyword::Abstract),
                     "intrinsic" => TokenKind::Keyword(Keyword::Intrinsic),
+                    "private" => TokenKind::Keyword(Keyword::Private),
                     "const" => TokenKind::Keyword(Keyword::Const),
                     "before" => TokenKind::Keyword(Keyword::Before),
                     "after" => TokenKind::Keyword(Keyword::After),

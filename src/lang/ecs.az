@@ -7,7 +7,7 @@ static TickOrder [EntityId] = []
 
 static Tick() {
     for entityId in TickOrder {
-        //Entities[entityId].Tick()
+        Entities[entityId].Tick()
     }
 }
 
@@ -22,8 +22,8 @@ shape Entity : Named, Identified, Parenting<Entity> {
         let entity = new Entity(
             Id = NextId()
         )
-        //Entities[entity.Id] = entity
-        //TickOrder.Append(entity.Id)
+        Entities[entity.Id] = entity
+        TickOrder.Append(entity.Id)
         return entity
     }
 
@@ -50,19 +50,25 @@ shape Scale {
     Scale Vec3 := Vec3(X=1,Y=1,Z=1)
 }
 shape Position {
-    Position Vec3 := Vec3(X=1,Y=1,Z=1)
+    Position Vec3 = default
 }
 shape Rotation {
-    Rotation Vec3 := Vec3(X=1,Y=1,Z=1)
+    Rotation Vec3 = default
 }
 
 shape Transform : Scale, Position, Rotation {}
 
-shape MeshPoint : Position {
+shape MeshPoint : Position, Identified {
     U double = 0
     V double = 0
 }
 
+shape MeshEdge {
+    First uint64
+    Second uint64
+}
+
 shape Mesh {
     Points {MeshPoint} = {}
+    Edges {MeshEdge} = {}
 }

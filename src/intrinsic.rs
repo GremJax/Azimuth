@@ -21,6 +21,14 @@ fn array_append(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
             input.runtime.push_array_element(*obj, *az, add.clone());
             Ok(true.into())
         }
+        Value::Local(id, kind) if kind.is_assignable_from(ValueKind::Array(Box::new(ValueKind::Dyn))) => {
+            let local = match input.runtime.locals.get_mut(id).unwrap() {
+                Value::Array(array, _) => array,
+                _ => unreachable!()
+            };
+            local.push(add.clone());
+            Ok(true.into())
+        }
         other => Err(RuntimeError::TypeMismatch{span:input.span, found: other.clone(), expected: ValueKind::Array(Box::new(ValueKind::None)) }),
     }
 }
@@ -232,6 +240,19 @@ fn dict_keys(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
     }
 }
 
+fn runtime_print_locals(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    println!("{:?}", input.runtime.locals);
+    Ok(Value::None)
+}
+fn runtime_print_objects(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    println!("{:?}", input.runtime.objects);
+    Ok(Value::None)
+}
+fn runtime_print_stack(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    println!("{}",input.runtime.get_stack_trace());
+    Ok(Value::None)
+}
+
 pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
     match name.as_str() {
         "Array::Append" => Ok(array_append),
@@ -259,12 +280,14 @@ pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
         "Range::ToArray" => Ok(range_to_array),
         "Range::Create" => Ok(range_create_inclusive),
         "Range::CreateExclusive" => Ok(range_create_exclusive),
+        "PrintObjects" => Ok(runtime_print_objects),
+        "PrintStack" => Ok(runtime_print_stack),
+        "PrintLocals" => Ok(runtime_print_locals),
 
         other => Err(ParseError::Error{span, message:format!("No intrinsic operation defined for {}", other)})
     }
 }
 
 fn todo(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
-    println!("Thing happened");
-    Ok(Value::None)
+    Err(RuntimeError::Error{span:input.span, message:format!("TODO")})
 }

@@ -165,7 +165,7 @@ shape Parenting<T : Parenting<T> > {
 
     RemoveParent() {
         self.Parent?.Children.Remove(self)
-        //self.Parent = null
+        self.Parent = null
     }
 
     IsChildOf(other T) -> bool
@@ -367,12 +367,32 @@ shape Vec2 {
     Y int = 0
 }
 
-shape MapDictEntry<K, V : MapDictEntry<K,V> > {
-    abstract GetKey() -> K
+shape IdDict : MapDict<uint64, Identified> (GetKey -> GetKey){
+    GetKey(val Identified) -> uint64 
+        return val.Id
 }
 
-shape MapDict<K, V : MapDictEntry<K,V> > {
-    Dict {K:V}
+shape NameDict : MapDict<string, Named> (GetKey -> GetKey){
+    GetKey(val Named) -> string 
+        return val.Name
+}
+
+shape MapDict<K, V> : DictWrapper<K,V> (
+    ContainsValue -> ContainsValue
+) {
+    abstract GetKey(val V) -> K
+    
+    Set(value V) -> bool 
+        return self::DictWrapper.Set(self.GetKey(value), value)
+    Remove(value V) -> bool 
+        return self::DictWrapper.Remove(self.GetKey(value))
+
+    ContainsValue(value V) -> bool 
+        return self.Get(self.GetKey(value)) != null
+}
+
+shape DictWrapper<K,V> {
+    Dict {K:V} = {:}
 
     Len() -> uint64 return self.Dict.Len()
     
@@ -380,21 +400,21 @@ shape MapDict<K, V : MapDictEntry<K,V> > {
         return self.Dict.Keys()
     Values() -> [V] 
         return self.Dict.Values()
-    
-    Set(value MapDictEntry<K,V>) -> bool 
-        return self.Dict.Set(value.GetKey(), value)
-    Remove(value MapDictEntry<K,V>) -> bool 
-        return self.Dict.Remove(value.GetKey())
+        
+    Set(key K, value V) -> bool 
+        return self.Dict.Set(key, value)
+    Remove(key K) -> bool 
+        return self.Dict.Remove(key)
 
     Get(key K) -> V? 
         return self.Dict.Get(key)
     GetOr(key K, def K) -> V 
         return self.Dict.GetOr(key, def)
-
+        
     ContainsKey(key K) -> bool 
         return self.Dict.ContainsKey(key)
-    ContainsValue(value MapDictEntry<K,V>) -> bool 
-        return self.Dict.ContainsKey(value.GetKey())
+    ContainsValue(value V) -> bool 
+        return self.Dict.ContainsValue(value)
 }
 
 shape Observable<T> {
@@ -410,6 +430,12 @@ shape Observable<T> {
     
     Unsubscribe(listener |T|)
         self.Listeners.Remove(listener)
+}
+
+namespace Runtime {
+    static intrinsic PrintObjects()
+    static intrinsic PrintStack()
+    static intrinsic PrintLocals()
 }
 
 print "standard library loaded"

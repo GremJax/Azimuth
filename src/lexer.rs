@@ -482,6 +482,7 @@ impl Lexer {
                     "string" => TokenKind::Type(ValueKind::String),
                     "void" => TokenKind::Type(ValueKind::None),
                     "object" => TokenKind::Type(ValueKind::Object(Vec::new())),
+                    "dyn" => TokenKind::Type(ValueKind::Dyn),
 
                     _ => TokenKind::Identifier(identifier),
                 }})

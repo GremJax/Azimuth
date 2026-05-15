@@ -163,7 +163,10 @@ pub struct RawFunctionSignature {
 #[derive(Debug, Clone)]
 pub enum AnnotationKind {
     Lang,
-
+    Private, Internal,
+    Const, Locked, 
+    Volatile,
+    Depricated,
 }
 
 impl AnnotationKind {
@@ -197,7 +200,7 @@ pub enum ShapeExpression {
     FunctionSignature(Span, Box<RawFunctionSignature>),
     Optional(Span, Box<ShapeExpression>),
 }
-
+ 
 impl ShapeExpression {
     pub fn get_identifier(&self) -> String {
         use ShapeExpression::*;
@@ -263,7 +266,7 @@ pub enum Statement {
         target: ShapeExpression,
     },
     //DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
-    DeclareLocal { span: Span, name: Identifier, value: Expression }, 
+    DeclareLocal { span: Span, name: Identifier, kind:Option<ShapeExpression>, value: Option<Expression> }, 
     Detach { span: Span, object: Expression, shape: ShapeExpression },
     AddMapping { span: Span, object: Expression, mapping: RawMapping },
     Attach { span: Span, object: Expression, attachment: RawAttachment },
@@ -883,7 +886,7 @@ fn parse_lambda(span:Span, tokens: &mut PeekableTokens) -> Result<Expression, Pa
             };
             let kind = match tokens.peek().unwrap().kind {
                 TokenKind::Operator(Operator::Arrow) | TokenKind::Operator(Operator::BWOr) => {
-                    tokens.next();
+                    //tokens.next();
                     None
                 }
                 _ => Some(parse_shape_expression(tokens)?)
@@ -1446,25 +1449,27 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
             };
 
             let token = tokens.peek().unwrap();
+            let kind: Option<ShapeExpression> = match token.kind {
+                TokenKind::Operator(Operator::Attach) | TokenKind::Operator(Operator::Assign) => None,
+                _ => Some(parse_shape_expression(tokens)?)
+            };
+
+            let token = tokens.peek().unwrap();
             match token.kind {
                 TokenKind::Operator(Operator::Attach) => {
                     // Object with attachment
                     tokens.next();
                     let attachment = parse_attachment(tokens)?;
                     let value = Expression::ObjectInit(span.clone(), attachment);
-                    Ok(Statement::DeclareLocal {span, name: object_identifier, value })
+                    Ok(Statement::DeclareLocal {span, name: object_identifier, kind, value:Some(value) })
                 }
                 TokenKind::Operator(Operator::Assign) => {
                     // Local with assignment
                     tokens.next();
                     let value = parse_expression(tokens, 0)?;
-                    Ok(Statement::DeclareLocal {span, name: object_identifier, value })
+                    Ok(Statement::DeclareLocal {span, name: object_identifier, kind, value:Some(value) })
                 }
-                _ => {
-                    return Err(ParseError::Error{span, message:format!("Backward Type Inference is WIP")})
-                    // Object without assignment
-                    //Ok(Statement::DeclareObject {span, name: object_identifier, shape:ShapeExpression::Primitive(token.span.clone(), ValueKind::Shape(OBJECT_INSTANCE)) })
-                }
+                _ => Ok(Statement::DeclareLocal {span, name: object_identifier, kind, value:None })
             }
         },
         
@@ -1862,7 +1867,9 @@ pub fn parse(input: Vec<Token>) -> Result<Vec<Statement>, ParseError> {
             TokenKind::EOF => break,
             _ => statements.push(match parse_statement(&mut tokens) {
                 Ok(statement) => statement,
-                Err(err) => return Err(ParseError::WithStatements{statements, error:Box::new(err)}),
+                Err(err) => 
+                    //return Err(err)
+                    return Err(ParseError::WithStatements{statements, error:Box::new(err)}),
             })
         }
     }

@@ -710,13 +710,31 @@ impl Analyzer {
         }
     }
 
+    fn get_with_parents(&self, shape:ValueKind) -> Vec<ValueKind> {
+        let mut result = Vec::new();
+        result.push(shape.clone());
+
+        match shape {
+            ValueKind::Shape(shape) => {
+                let info = self.shapes.get(&shape.id).unwrap();
+                for parent in &info.parents {
+                    result.append(&mut self.get_with_parents(ValueKind::Shape(ShapeInstance{id: parent.base.id, generics: Vec::new()})));
+                }
+            }
+            _ => {}
+        }
+
+        result
+    }
+
     fn add_local_known_type(&mut self, span:&Span, scope:ScopeId, id:LocalId, shape:ResolvedShapeExpression) -> Result<(), CompileError> {
+        let mut known = self.get_with_parents(shape.kind());
         let scope = self.get_scope_mut(scope);
         for symbol in scope.symbols.values_mut() {
             match symbol {
                 Symbol::Local(info) if info.id == id => {
                     println!("Local {:?} has known shapes: {:?}, adding {:?}", info.name, info.known_shapes, shape.kind());
-                    info.known_shapes.push(shape.kind());
+                    info.known_shapes.append(&mut known);
                     return Ok(())
                 },
                 _ => continue
@@ -918,6 +936,13 @@ impl Analyzer {
                     None => match self.get_azimuth(&span, scope, member.clone(), None, None)? {
                         Some(info) => info,
                         None => {
+                            for parent in &shape.parents {
+                                match self.get_azimuth_in_parents(&span, scope, member.clone(), parent.base.id, None)? {
+                                    Some(info) => return Ok(info),
+                                    None => continue
+                                }
+                            }
+
                             println!("ERRORCODE");
                             return Err(CompileError::UndefinedSymbol { span, name: member })
                         }
@@ -1014,71 +1039,72 @@ impl Analyzer {
             }
             Expression::Array(span, expressions, kind) => {
                 let mut values = Vec::new();
+
+                let match_type = match known_type.clone() {
+                    None => kind,
+                    Some(ValueKind::Array(kind)) => Some(*kind),
+                    Some(other) => return Err(CompileError::TypeMismatch { span, expected:other, found:ValueKind::Array(Box::new(ValueKind::Dyn)), loc:format!("") })
+                };
+
                 for item in expressions {
-                    values.push(self.resolve_expression(item, scope.clone(), kind.clone())?);
+                    values.push(self.resolve_expression(item, scope.clone(), match_type.clone())?);
                 }
 
-                let kind = match kind {
+                let array_kind = match match_type {
                     Some(k) => k,
-                    None => match values.first() {
-                        Some(val) => val.kind(),
-                        None => match known_type.clone() {
-                            Some(ValueKind::Array(kind)) => *kind,
-                            _ => ValueKind::None,
-                        }
+                    None => match known_type.clone() {
+                        Some(ValueKind::Array(kind)) => *kind,
+                        _ => ValueKind::Dyn,
                     }
                 };
 
-                ResolvedExpression::Array(span, values, kind)
+                ResolvedExpression::Array(span, values, array_kind)
             },
             Expression::Set(span, expressions, kind) => {
                 let mut values = HashSet::new();
+
+                let match_type = match known_type.clone() {
+                    None => kind,
+                    Some(ValueKind::Set(kind)) => Some(*kind),
+                    Some(other) => return Err(CompileError::TypeMismatch { span, expected:other, found:ValueKind::Set(Box::new(ValueKind::Dyn)), loc:format!("") })
+                };
+
                 for item in expressions {
-                    values.insert(self.resolve_expression(item, scope.clone(), kind.clone())?);
+                    values.insert(self.resolve_expression(item, scope.clone(), match_type.clone())?);
                 }
 
-                let kind = match kind {
+                let set_kind = match match_type {
                     Some(k) => k,
-                    None => match values.iter().find(|_|true) {
-                        Some(val) => val.kind(),
-                        None => match known_type.clone() {
-                            Some(ValueKind::Set(kind)) => *kind,
-                            _ => ValueKind::None,
-                        }
+                    None => match known_type.clone() {
+                        Some(ValueKind::Set(kind)) => *kind,
+                        _ => ValueKind::Dyn,
                     }
                 };
 
-                ResolvedExpression::Set(span, values.iter().cloned().collect(), kind)
+                ResolvedExpression::Set(span, values.iter().cloned().collect(), set_kind)
             },
             Expression::Dict(span, expressions, key_kind, value_kind) => {
                 let mut values = HashMap::new();
+
+                let (match_key, match_value) = match known_type.clone() {
+                    None => (key_kind, value_kind),
+                    Some(ValueKind::Dict(key_kind, value_kind)) => (Some(*key_kind), Some(*value_kind)),
+                    Some(other) => return Err(CompileError::TypeMismatch { span, expected:other, found:ValueKind::Dict(Box::new(ValueKind::Dyn),Box::new(ValueKind::Dyn)), loc:format!("") })
+                };
+
                 for (key, val) in expressions {
-                    values.insert(self.resolve_expression(key, scope.clone(), key_kind.clone())?, self.resolve_expression(val, scope.clone(), value_kind.clone())?);
+                    values.insert(self.resolve_expression(key, scope.clone(), match_key.clone())?, self.resolve_expression(val, scope.clone(), match_value.clone())?);
                 }
-
-                let key_kind = match key_kind {
-                    Some(k) => k,
-                    None => match values.keys().find(|_|true) {
-                        Some(val) => val.kind(),
-                        None => match known_type.clone() {
-                            Some(ValueKind::Dict(key_kind, _)) => *key_kind,
-                            _ => ValueKind::None,
-                        }
+                
+                let (dict_key, dict_value) = match (match_key, match_value) {
+                    (Some(k), Some(v)) => (k,v),
+                    (_, _) => match known_type.clone() {
+                        Some(ValueKind::Dict(k,v)) => (*k,*v),
+                        _ => (ValueKind::Dyn,ValueKind::Dyn),
                     }
                 };
 
-                let value_kind = match value_kind {
-                    Some(k) => k,
-                    None => match values.values().find(|_|true) {
-                        Some(val) => val.kind(),
-                        None => match known_type.clone() {
-                            Some(ValueKind::Dict(_, value_kind)) => *value_kind,
-                            _ => ValueKind::None,
-                        }
-                    }
-                };
-
-                ResolvedExpression::Dict(span, values.iter().map(|(k,v)| (k.clone(),v.clone())).collect(), key_kind, value_kind)
+                ResolvedExpression::Dict(span, values.iter().map(|(k,v)| (k.clone(),v.clone())).collect(), dict_key, dict_value)
             },
             Expression::Range(span, from, to) => {
                 todo!()
@@ -1105,6 +1131,7 @@ impl Analyzer {
                     Some(ValueKind::Array(kind)) => ResolvedExpression::Value(span, Value::Array([].into(), *kind)),
                     Some(ValueKind::Set(kind)) => ResolvedExpression::Value(span, Value::Set([].into(), *kind)),
                     Some(ValueKind::Dict(key_kind, value_kind)) => ResolvedExpression::Value(span, Value::Dict([].into(), *key_kind, *value_kind)),
+                    Some(ValueKind::Range(kind)) => ResolvedExpression::Value(span, Value::Range(0.into(), 0.into(), 1.into(), false, kind)),
 
                     // Other
                     Some(ValueKind::Option(_)) => ResolvedExpression::Value(span, Value::None),
@@ -1384,7 +1411,12 @@ impl Analyzer {
                 }
 
                 for index in 0..args.len() {
-                    let arg = self.resolve_expression(args.get(index).unwrap().clone(), scope, func.input_types.get(index).cloned())?;
+                    let known_type = if func.has_self && index == 0 {
+                        None
+                    } else {
+                        func.input_types.get(index).cloned()
+                    };
+                    let arg = self.resolve_expression(args.get(index).unwrap().clone(), scope, known_type)?;
 
                     match func.input_types.get(if func.has_self { index + 1 } else { index }) {
                         Some(param) => {
@@ -1504,17 +1536,13 @@ impl Analyzer {
 
         };
 
+        println!("Known type: {:?}, mine: {:?}", known_type, resolved.kind());
         match known_type {
             None => {},
-            Some(ValueKind::Number(num_kind)) => {
-                match resolved {
-                    ResolvedExpression::Value(span, Value::Number(num)) => 
-                        return Ok(ResolvedExpression::Value(span,num.to(num_kind).unwrap().into())),
-                    _ => {}
+            Some(kind) => {
+                if !resolved.kind().is_assignable_from(kind.clone()) {
+                    return Err(CompileError::TypeMismatch { span: resolved.span().clone(), expected:kind, found:resolved.kind(), loc: format!("") })
                 }
-            }
-            Some(kind) => if !resolved.kind().is_assignable_from(kind.clone()) {
-                //return Err(CompileError::TypeMismatch { span: Span::default(), expected:kind, found:resolved.kind(), loc: format!("") })
             }
         }
 
@@ -1633,22 +1661,34 @@ impl Analyzer {
             Statement::DeclareShape { .. } => {
                 Ok(ResolvedStatement::Block(Vec::new()))
             }
-            Statement::DeclareLocal { span, name, value } => {
+            Statement::DeclareLocal { span, name, kind, value } => {
                 let my_scope = self.get_scope_mut(scope);
                 if my_scope.symbols.contains_key(&name) { return Err(CompileError::DuplicateSymbol{span, name}); }
 
-                let value = self.resolve_expression(value, scope, None)?;
-                let mut kinds = Vec::new();
+                let resolved_kind = match kind {
+                    Some(shape) => Some(self.resolve_shape_expression(shape, scope)?.kind()),
+                    None => None
+                };
+                println!("Expected: {:?}", resolved_kind);
 
-                match value.kind() {
-                    ValueKind::Object(known) => kinds = known,
-                    other => kinds.push(other),
-                }
+                let value = match value {
+                    Some(value) => {
+                        self.resolve_expression(value, scope, resolved_kind.clone())?
+                    }
+                    None => ResolvedExpression::Value(span.clone(), Value::None),
+                };
+
+                let known = match value.kind() {
+                    ValueKind::Object(known) => known,
+                    other => match resolved_kind {
+                        Some(kind) => [kind].to_vec(),
+                        None => [other].to_vec(),
+                    }
+                };
     
-                let id = self.declare_local(scope, name.clone(), kinds.clone());
-                kinds.push(value.kind());
+                let id = self.declare_local(scope, name.clone(), known.clone());
 
-                let info = LocalInfo{ id, name, known_shapes: kinds };
+                let info = LocalInfo{ id, name, known_shapes: known };
                 Ok(ResolvedStatement::DeclareLocal{ span, info, value })
             }
             Statement::Detach { span, object, shape } => {

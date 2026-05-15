@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, analyzer::CompileError, lexer::{self, Span}, parser::{self, Annotation, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
+use crate::{AzimuthFlags, EnumId, ValueKind, analyzer::CompileError, lexer::{self, Span}, parser::{self, Annotation, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
 
 #[derive(Debug, Clone)]
 pub enum LoadError {
@@ -104,6 +104,14 @@ pub struct AtlasMapping {
     pub flags: AtlasMappingFlags,
 }
 
+#[derive(Debug, Clone)]
+pub struct EnumDefinition {
+    pub id: EnumId,
+    pub max_index: EnumId,
+    pub backing: ShapeExpression,
+    pub raw_values: Vec<Expression>,
+}
+
 pub struct Loader {
     pub source_dir: String,
     pub files: HashMap<AtlasLocation, Vec<Statement>>,
@@ -112,6 +120,7 @@ pub struct Loader {
     pub next_az_id: u32,
     pub next_ns_id: u32,
     pub extensions: Vec<Namespace>,
+    pub enums: Vec<EnumDefinition>,
 }
 
 impl Loader {
@@ -136,6 +145,7 @@ impl Loader {
             next_az_id: 0,
             next_ns_id: 0,
             extensions: Vec::new(),
+            enums: Vec::new(),
         }
     }
 

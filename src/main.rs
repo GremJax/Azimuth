@@ -15,12 +15,16 @@ pub mod intrinsic;
 
 // Formerly SlotBox
 
+type EnumId = u32;
+type EnumIndex = u32;
+
 // Runtime Value
 #[derive(Default, Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ValueKind {
     Number(NumKind),
     Bool,
     String,
+    Enum(Box<ValueKind>, EnumId),
     Range(NumKind),
     Shape(ShapeInstance),
     Array(Box<ValueKind>),
@@ -35,6 +39,7 @@ pub enum ValueKind {
     Function(Box<FunctionSignature>),
     Generic(GenericId, Vec<ValueKind>),
     Multiple(Vec<ValueKind>),
+    Dyn,
     //Static(Vec<ShapeInstance>),
     #[default] None
 }
@@ -42,6 +47,7 @@ pub enum ValueKind {
 impl ValueKind {
     fn is_assignable_from(&self, other_raw: ValueKind) -> bool {
         let other = match other_raw {
+            ValueKind::Dyn => return true,
             ValueKind::Option(kind) => {
                 if matches!(self, ValueKind::None) { return true }
                 *kind
@@ -58,6 +64,10 @@ impl ValueKind {
                 }
                 return true
             }
+            ValueKind::Enum(backing, id) => match *backing {
+                ValueKind::None => ValueKind::Enum(backing, id),
+                _ => *backing
+            }
             kind => kind
         };
         match self {
@@ -65,6 +75,14 @@ impl ValueKind {
 
             ValueKind::Bool => other == ValueKind::Bool,
             ValueKind::String => other == ValueKind::String,
+
+            ValueKind::Enum(backing, id) => match *backing.clone() {
+                ValueKind::None => match other {
+                    ValueKind::Enum(_, other_id) => other_id == *id,
+                    _ => false
+                }
+                backing => backing.is_assignable_from(other)
+            }
             
             ValueKind::Shape(k) => other == ValueKind::Shape(k.clone()),
             ValueKind::Array(k) => match other {
@@ -130,6 +148,7 @@ impl ValueKind {
 
             ValueKind::Option(k) => k.is_assignable_from(other.clone()) || other.is_assignable_from(ValueKind::Bool),
             ValueKind::Multiple(kinds) => kinds.iter().any(|kind| kind.is_assignable_from(other.clone())),
+            ValueKind::Dyn => return false,
 
             ValueKind::None => other == ValueKind::None || other.is_assignable_from(ValueKind::Bool),
         }
@@ -421,6 +440,7 @@ pub enum Value {
     Number(Number),
     Bool(bool),
     String(String),
+    Enum(ValueKind, EnumId, EnumIndex),
 
     Array(Vec<Value>, ValueKind),
     Set(Vec<Value>, ValueKind),
@@ -501,6 +521,7 @@ impl Value {
             Value::Number(num) => num.kind(),
             Value::Bool(_) => ValueKind::Bool,
             Value::String(_) => ValueKind::String,
+            Value::Enum(backing, id, _) => ValueKind::Enum(Box::new(backing.clone()), *id),
             Value::Array(_, value_type) => ValueKind::Array(Box::new(value_type.clone())),
             Value::Set(_, value_type) => ValueKind::Set(Box::new(value_type.clone())),
             Value::Dict(_, key_type, value_type) => ValueKind::Dict(Box::new(key_type.clone()),Box::new(value_type.clone())),
@@ -1521,7 +1542,8 @@ impl Runtime {
                 ValueKind::Set(_) => "Set",
                 ValueKind::Dict(_,_) => "Dict",
                 ValueKind::Range(_) => "Range",
-                _ => todo!()
+                ValueKind::Object(_) => "Object",
+                other => panic!("How tf did you call {:?}", other)
             }) {
                 return Some(shape.id)
             }

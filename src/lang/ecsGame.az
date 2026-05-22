@@ -5,14 +5,16 @@ shape Counter : Named {
     Value int = 0
     Step int = 1
 
-    Reset() self.Value = 0
+    Reset() 
+        self.Value = 0
 
     Next() -> int {
         self.Value += self.Step
         return self.Value
     }
 
-    Add(count int) self.Value += count
+    Add(count int) 
+        self.Value += count
 }
 
 shape PrintThing {
@@ -61,7 +63,33 @@ print arrayThing
 dynArray[4]::Identified.Id = 69
 print dynArray
 
+for i in (0 ...6)/2 {
+    print i
+}
+
 Runtime.PrintStack()
 Runtime.PrintLocals()
 
- 
+enum MyEnum : double {
+    State1 -> 45
+    State2 -> 69
+    State3
+    State9 -> 100
+}
+
+enum Temperature : string {
+    hot, warm, normal, cool, cold
+}
+
+let temp Temperature = .cool
+print temp
+
+//let temp2 = Temperature.warm
+//print temp2
+
+print temp.Raw()
+
+let bob MyEnum = .State2
+print bob.Raw()
+bob = .State3
+print bob.Raw()

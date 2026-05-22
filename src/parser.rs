@@ -78,6 +78,7 @@ pub enum Expression {
     Dict(Span, Vec<(Expression, Expression)>, Option<ValueKind>, Option<ValueKind>),
     Range(Span, Value, Value),
     Variable(Span, Identifier),
+    EnumValue(Span, Identifier),
     Option(Span, Box<Option<Expression>>),
     Shape(Span, ShapeExpression),
     ObjectInit(Span, RawAttachment),
@@ -130,6 +131,33 @@ pub enum Expression {
         captures: Vec<Identifier>,
     },
     Reflection(Span, Box<Expression>)
+}
+
+impl Expression {
+    pub fn span(&self) -> &Span {
+        match self {
+            Expression::Value(span, _) => span,
+            Expression::Default(span) => span,
+            Expression::StringFormat(span, _) => span,
+            Expression::Array(span, _, _) => span,
+            Expression::Set(span, _, _) => span,
+            Expression::Dict(span, _, _, _) => span,
+            Expression::Range(span, _, _) => span,
+            Expression::Variable(span, _) => span,
+            Expression::EnumValue(span, _) => span,
+            Expression::Option(span, _) => span,
+            Expression::Shape(span, _) => span,
+            Expression::ObjectInit(span, _) => span,
+            Expression::UnaryOp { span,.. } => span,
+            Expression::BinaryOp { span,.. } => span,
+            Expression::Ternary { span,.. } => span,
+            Expression::MemberAccess { span,.. } => span,
+            Expression::ArrayAccess { span,.. } => span,
+            Expression::FunctionCall { span,.. } => span,
+            Expression::Function { span,.. } => span,
+            Expression::Reflection(span, _) => span,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +268,13 @@ pub struct RawAzimuth {
 }
 
 #[derive(Debug, Clone)]
+pub struct EnumValue {
+    pub span: Span,
+    pub name: Identifier,
+    pub value: Option<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Statement {
     Using { span: Span, package: NamespaceId },
     DeclareAzimuth { 
@@ -264,6 +299,12 @@ pub enum Statement {
         span: Span,
         new: Identifier,
         target: ShapeExpression,
+    },
+    DeclareEnum { 
+        span: Span, 
+        name: Identifier, 
+        raw_type: Option<ShapeExpression>,
+        values: Vec<EnumValue>,
     },
     //DeclareObject { span: Span, name: Identifier, shape: ShapeExpression }, 
     DeclareLocal { span: Span, name: Identifier, kind:Option<ShapeExpression>, value: Option<Expression> }, 
@@ -381,6 +422,15 @@ fn parse_expression(tokens: &mut PeekableTokens, min_bp: u8) -> Result<Expressio
 
         // Lambda
         TokenKind::Operator(Operator::BWOr) => parse_lambda(span, tokens)?,
+
+        // Enum
+        TokenKind::Operator(Operator::Dot) => {
+            let token = tokens.next().unwrap();
+            match token.kind {
+                TokenKind::Identifier(identifier) => Expression::EnumValue(token.span, identifier),
+                other => return Err(ParseError::IncorrectToken { span, token:other, expected:format!("enum identifier"), loc: format!("inferred enum value") })
+            }
+        },
 
         // String format
         TokenKind::StringFormat(s) => {
@@ -1401,6 +1451,55 @@ fn parse_statement(tokens: &mut PeekableTokens) -> Result<Statement, ParseError>
 
             Ok(Statement::DeclareShape { span, name: shape_identifier, slot_ids, parents, generics, extension, annotations })
         },
+
+        // Enum declaration
+        TokenKind::Keyword(Keyword::Enum) => {
+            tokens.next(); // consume keyword
+
+            // Identifier
+            let name = match tokens.next().unwrap().kind {
+                TokenKind::Identifier(name) => name.clone(),
+                token => return Err(ParseError::UnexpectedToken { span, token, loc:format!("enum declaration") }),
+            };
+
+            // Raw type
+            let token = tokens.peek().unwrap();
+            let raw_type = if matches!(token.kind, TokenKind::Operator(Operator::Colon)) {
+                tokens.next(); // Consume colon
+                Some(parse_shape_expression(tokens)?)
+            } else { 
+                None 
+            };
+
+            // Left brace
+            let token = tokens.next().unwrap();
+            if !matches!(token.kind, TokenKind::LeftBrace) {
+                return Err(ParseError::IncorrectToken{span, token:token.kind, expected:format!("{{"), loc:format!("enum declaration")});
+            }
+
+            let mut values = Vec::new();
+            while let Some(token) = tokens.next() {
+                let span = token.span.clone();
+                match token.kind {
+                    TokenKind::Identifier(identifier) => {
+                        let token = tokens.peek().unwrap();
+                        let value = if matches!(token.kind, TokenKind::Operator(Operator::Arrow)) {
+                            tokens.next(); // consume arrow
+                            Some(parse_expression(tokens, 0)?)
+                        } else {
+                            None
+                        };
+
+                        values.push(EnumValue{span,name:identifier, value});
+                    }
+                    TokenKind::Comma | TokenKind::Semicolon => {},
+                    TokenKind::RightBrace => break,
+                    other => return Err(ParseError::UnexpectedToken { span, token:other, loc:format!("enum declaration") }),
+                }
+            }
+
+            Ok(Statement::DeclareEnum{ span, name, raw_type, values })
+        }
 
         // Azimuth declaration within namespace
         TokenKind::Keyword(Keyword::Static) => {

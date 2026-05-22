@@ -105,6 +105,7 @@ pub fn evaluate_shape(runtime: &Runtime, shape:ResolvedShapeExpression) -> Value
 pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<Value, RuntimeError> {
     match expression {
         ResolvedExpression::Value(_, value) => Ok(value),
+        ResolvedExpression::EnumValue(_,id,index) => Ok(Value::Enum(id,index)),
         ResolvedExpression::Array(_, expressions, kind) => {
             let mut values = Vec::new();
             for item in expressions {
@@ -159,6 +160,7 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
 
                 // Other
                 ValueKind::Option(_) => Value::None,
+                ValueKind::Enum(id) => Value::Enum(id, 0),
                 
                 // Object
                 ValueKind::Object(kinds) => {
@@ -357,6 +359,19 @@ pub fn evaluate(runtime: &mut Runtime, expression:ResolvedExpression) -> Result<
                         Operator::NEqual => Ok((left != right).into()),
                         
                         Operator::Add => Ok((left + &right).into()),
+                        
+                        operator => Err(RuntimeError::InvalidOperator { span, operator, operand: ValueKind::String }),
+                    }
+                }
+
+                // Range - num
+                (Value::Range(from, to, _, inclusive, kind), op, ValueKind::Number(num)) if ValueKind::Number(kind).is_assignable_from(num.into()) => {
+                    let by = match evaluate(runtime, *right)? {
+                        Value::Number(num) => num.to(kind).unwrap(),
+                        _ => unreachable!()
+                    };
+                    match op {
+                        Operator::Div => Ok(Value::Range(from, to, by, inclusive, kind)),
                         
                         operator => Err(RuntimeError::InvalidOperator { span, operator, operand: ValueKind::String }),
                     }

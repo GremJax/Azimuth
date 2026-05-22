@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, EnumId, ValueKind, analyzer::CompileError, lexer::{self, Span}, parser::{self, Annotation, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
+use crate::{AzimuthFlags, AzimuthId, EnumId, ValueKind, analyzer::CompileError, lexer::{self, Span}, parser::{self, Annotation, EnumValue, Expression, Identifier, ParseError, ParsedAtlas, RawAttachment, RawMapping, ShapeExpression, Statement}};
 
 #[derive(Debug, Clone)]
 pub enum LoadError {
@@ -58,6 +58,7 @@ pub struct Namespace {
     pub azimuths: Vec<LoadedAzimuth>,
     pub dependencies: Vec<NamespaceId>,
     pub aliases: Vec<(Identifier, ShapeExpression)>,
+    pub enums: Vec<EnumDefinition>,
     pub annotations: Vec<Annotation>,
 }
 
@@ -106,10 +107,11 @@ pub struct AtlasMapping {
 
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
+    pub name: Identifier,
     pub id: EnumId,
     pub max_index: EnumId,
-    pub backing: ShapeExpression,
-    pub raw_values: Vec<Expression>,
+    pub backing: Option<ShapeExpression>,
+    pub raw_values: Vec<EnumValue>,
 }
 
 pub struct Loader {
@@ -117,10 +119,10 @@ pub struct Loader {
     pub files: HashMap<AtlasLocation, Vec<Statement>>,
     pub load_order: Vec<(AtlasLocation, Identifier, u32)>,
     pub namespaces: Vec<Namespace>,
-    pub next_az_id: u32,
+    pub next_az_id: AzimuthId,
     pub next_ns_id: u32,
+    pub next_en_id: EnumId,
     pub extensions: Vec<Namespace>,
-    pub enums: Vec<EnumDefinition>,
 }
 
 impl Loader {
@@ -135,6 +137,7 @@ impl Loader {
             azimuths: Vec::new(),
             dependencies: Vec::new(),
             aliases: Vec::new(),
+            enums: Vec::new(),
             annotations: Vec::new(),
         };
         Loader { 
@@ -144,8 +147,8 @@ impl Loader {
             load_order: Vec::new(),
             next_az_id: 0,
             next_ns_id: 0,
+            next_en_id: 0,
             extensions: Vec::new(),
-            enums: Vec::new(),
         }
     }
 
@@ -158,6 +161,12 @@ impl Loader {
     pub fn next_namespace_id(&mut self) -> u32 {
         let id = self.next_ns_id;
         self.next_ns_id += 1;
+        id
+    }
+
+    pub fn next_enum_id(&mut self) -> u32 {
+        let id = self.next_en_id;
+        self.next_en_id += 1;
         id
     }
 
@@ -205,6 +214,7 @@ impl Loader {
         let mut azimuths = Vec::new();
         let mut dependencies = Vec::new();
         let mut aliases = Vec::new();
+        let mut enums = Vec::new();
 
         for statement in statements {
             match statement {
@@ -214,6 +224,15 @@ impl Loader {
                 }
                 Statement::Alias { new, target, .. } => {
                     aliases.push((new, target));
+                }
+                Statement::DeclareEnum { name, raw_type, values, .. } => {
+                    enums.push(EnumDefinition { 
+                        name, 
+                        id:self.next_enum_id(),
+                        max_index: (values.len() - 1) as u32, 
+                        backing: raw_type, 
+                        raw_values: values 
+                    });
                 }
                 Statement::DeclareShape { span, name, slot_ids, parents, generics, extension, annotations, .. } => {
                     let name = format!("{}::{}", identifier, name);
@@ -233,6 +252,7 @@ impl Loader {
                         children:Vec::new(), 
                         dependencies:dependencies.clone(),
                         aliases:Vec::new(),
+                        enums:Vec::new(), 
                         azimuths,
                         annotations
                     };
@@ -273,7 +293,7 @@ impl Loader {
                 _ => {}
             }
         }
-        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies, aliases, annotations:Vec::new()};
+        let namespace = Namespace{span, name:identifier, id: self.next_namespace_id(), kind:NamespaceKind::Namespace, children, azimuths, dependencies, aliases, enums, annotations:Vec::new()};
         self.namespaces.push(namespace.clone());
         Ok(namespace)
     }
@@ -346,6 +366,36 @@ impl Loader {
             }
         }
         azimuths
+    }
+
+    pub fn get_enums(&self, identifier: &Identifier, using:&Vec<NamespaceId>) -> Vec<EnumId> {
+        let mut found = Vec::new();
+        let mut seen = HashSet::new();
+
+        for namespaceid in using {
+            for namespace in &self.namespaces {
+                if !seen.contains(&namespace.name) && namespaceid.clone() == namespace.name.clone() {
+                    seen.insert(&namespace.name);
+                    for enum_def in &namespace.enums {
+                        if enum_def.name.clone() == identifier.clone() {
+                            found.push(enum_def.id);
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    pub fn get_enum(&self, id: EnumId) -> Option<&EnumDefinition> {
+        for namespace in &self.namespaces {
+            for enum_def in &namespace.enums {
+                if enum_def.id == id {
+                    return Some(enum_def);
+                }
+            }
+        }
+        None
     }
 
     pub fn get_namespaces_matching(&self, identifier: Identifier, using:Vec<NamespaceId>) -> Vec<&Namespace> {

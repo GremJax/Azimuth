@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, fs};
 use ordered_float::OrderedFloat;
 
 use crate::{
-    analyzer::{AzimuthInfo, LocalId, ObjectInfo, ResolvedAttachment, ResolvedExpression, ResolvedFunctionBody, ResolvedStatement, ShapeInfo, StaticInfo, Symbol}, 
+    analyzer::{AzimuthInfo, EnumInfo, LocalId, ObjectInfo, ResolvedAttachment, ResolvedExpression, ResolvedFunctionBody, ResolvedStatement, ShapeInfo, StaticInfo, Symbol}, 
     executor::{RuntimeError, ShapeInstance}, lexer::Span, loader::Loader, parser::{Identifier, MappingKind},
 };
 
@@ -24,7 +24,7 @@ pub enum ValueKind {
     Number(NumKind),
     Bool,
     String,
-    Enum(Box<ValueKind>, EnumId),
+    Enum(EnumId),
     Range(NumKind),
     Shape(ShapeInstance),
     Array(Box<ValueKind>),
@@ -64,10 +64,10 @@ impl ValueKind {
                 }
                 return true
             }
-            ValueKind::Enum(backing, id) => match *backing {
-                ValueKind::None => ValueKind::Enum(backing, id),
-                _ => *backing
-            }
+            //ValueKind::Enum(id, backing) => match backing {
+            //    None => ValueKind::Enum(id, None),
+            //    Some(backing) => *backing
+            //}
             kind => kind
         };
         match self {
@@ -76,13 +76,14 @@ impl ValueKind {
             ValueKind::Bool => other == ValueKind::Bool,
             ValueKind::String => other == ValueKind::String,
 
-            ValueKind::Enum(backing, id) => match *backing.clone() {
-                ValueKind::None => match other {
-                    ValueKind::Enum(_, other_id) => other_id == *id,
-                    _ => false
-                }
-                backing => backing.is_assignable_from(other)
-            }
+            //ValueKind::Enum(id, backing) => match backing {
+            //    None => match other {
+            //        ValueKind::Enum(other_id, _) => other_id == *id,
+            //        _ => false
+            //    }
+            //    Some(backing) => backing.is_assignable_from(other)
+            //}
+            ValueKind::Enum(id) => other == ValueKind::Enum(*id),
             
             ValueKind::Shape(k) => other == ValueKind::Shape(k.clone()),
             ValueKind::Array(k) => match other {
@@ -154,6 +155,12 @@ impl ValueKind {
         }
     }
 
+}
+
+impl From<NumKind> for ValueKind {
+    fn from(kind: NumKind) -> Self {
+        ValueKind::Number(kind)
+    }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -440,7 +447,7 @@ pub enum Value {
     Number(Number),
     Bool(bool),
     String(String),
-    Enum(ValueKind, EnumId, EnumIndex),
+    Enum(EnumId, EnumIndex),
 
     Array(Vec<Value>, ValueKind),
     Set(Vec<Value>, ValueKind),
@@ -521,7 +528,7 @@ impl Value {
             Value::Number(num) => num.kind(),
             Value::Bool(_) => ValueKind::Bool,
             Value::String(_) => ValueKind::String,
-            Value::Enum(backing, id, _) => ValueKind::Enum(Box::new(backing.clone()), *id),
+            Value::Enum(id, _) => ValueKind::Enum(*id),
             Value::Array(_, value_type) => ValueKind::Array(Box::new(value_type.clone())),
             Value::Set(_, value_type) => ValueKind::Set(Box::new(value_type.clone())),
             Value::Dict(_, key_type, value_type) => ValueKind::Dict(Box::new(key_type.clone()),Box::new(value_type.clone())),
@@ -840,6 +847,7 @@ pub struct CallStackFunction {
 // Runtime
 pub struct Runtime {
     shapes: HashMap<u32, ShapeInfo>,    
+    enums: HashMap<EnumId, EnumInfo>,    
     azimuths: HashMap<u32, AzimuthInfo>,
     objects: HashMap<ObjectId, Object>,
     locals: HashMap<LocalId, Value>,
@@ -850,7 +858,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    fn new(shapes: HashMap<ShapeId, ShapeInfo>, azimuths: HashMap<AzimuthId, AzimuthInfo>) -> Self {
+    fn new(shapes: HashMap<ShapeId, ShapeInfo>, azimuths: HashMap<AzimuthId, AzimuthInfo>, enums: HashMap<EnumId, EnumInfo>) -> Self {
         let global = Object {
                 id: 0,
                 name: format!("global"),
@@ -865,6 +873,7 @@ impl Runtime {
         let mut runtime = Runtime {
             shapes,
             azimuths,
+            enums: enums.clone(),
             objects: HashMap::new(),
             locals: HashMap::new(),
             next_object_id: 1,
@@ -1543,12 +1552,17 @@ impl Runtime {
                 ValueKind::Dict(_,_) => "Dict",
                 ValueKind::Range(_) => "Range",
                 ValueKind::Object(_) => "Object",
+                ValueKind::Enum(_) => "Enum",
                 other => panic!("How tf did you call {:?}", other)
             }) {
                 return Some(shape.id)
             }
         }
         None
+    }
+
+    fn get_enum(&self, id: EnumId) -> Option<&EnumInfo> {
+        self.enums.get(&id)
     }
 
     fn print_object(&self, object_id: ObjectId) {
@@ -1610,7 +1624,7 @@ fn main() {
         Ok(resolved_ast) => resolved_ast,
     };
 
-    let mut runtime = Runtime::new(analyzer.shapes, analyzer.azimuths);
+    let mut runtime = Runtime::new(analyzer.shapes, analyzer.azimuths, analyzer.enums);
     match executor::execute(&mut runtime, resolved_ast, analyzer.namespace_static_info){
         Err(error) => runtime.panic_stack_trace(error),
         _ => println!("Program executed successfully."),

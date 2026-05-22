@@ -244,6 +244,11 @@ shape Dict<K, V> {
         return self.Values().Contains(value)
 }
 
+#Lang("Enum")
+shape Enum<T> {
+    intrinsic Raw() -> T
+}
+
 shape Pair<K, V> {
     First K
     Second V

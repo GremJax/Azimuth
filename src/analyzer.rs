@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, fs};
 
-use crate::{AzimuthFlags, AzimuthId, Function, FunctionParameter, FunctionSignature, GenericId, NumKind, Number, ObjectId, ShapeId, Value, ValueKind, analyzer, executor::{self, OBJECT_INSTANCE, ShapeInstance}, intrinsic::IntrinsicOp, lexer::{self, Span}, loader::{Loader, Namespace, NamespaceId, NamespaceKind}, parser::{self, Annotation, AnnotationKind, FunctionBody, MappingKind, RawAttachment, RawMapping}}; 
+use crate::{AzimuthFlags, AzimuthId, EnumId, EnumIndex, Function, FunctionParameter, FunctionSignature, GenericId, NumKind, Number, ObjectId, ShapeId, Value, ValueKind, analyzer, executor::{self, OBJECT_INSTANCE, ShapeInstance}, intrinsic::IntrinsicOp, lexer::{self, Span}, loader::{EnumDefinition, Loader, Namespace, NamespaceId, NamespaceKind}, parser::{self, Annotation, AnnotationKind, EnumValue, FunctionBody, MappingKind, RawAttachment, RawMapping}}; 
 use parser::{RawAzimuth, Expression, Statement, ShapeExpression};
 use lexer::{Operator};
 
@@ -76,6 +76,20 @@ pub struct ShapeInfo {
 
     pub attach_az_id: Option<AzimuthId>,
     pub detach_az_id: Option<AzimuthId>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ResolvedEnumValue {
+    pub name: Identifier,
+    pub value: Option<ResolvedExpression>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct EnumInfo {
+    pub id: EnumId,
+    pub name: Identifier,
+    pub backing: Option<Box<ResolvedShapeExpression>>,
+    pub values: Vec<ResolvedEnumValue>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -338,7 +352,7 @@ impl ResolvedStatement {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ResolvedShapeExpression {
-    Simple(Span, ShapeInfo),
+    Shape(Span, ShapeInfo),
     Parameter(Span, Identifier), // T
     Primitive(Span, ValueKind),
     Array(Span, Box<ResolvedShapeExpression>),
@@ -350,12 +364,13 @@ pub enum ResolvedShapeExpression {
         args: Vec<ResolvedShapeExpression>,
     },
     Optional(Span, Box<ResolvedShapeExpression>),
+    Enum(Span, EnumInfo),
 }
 
 impl ResolvedShapeExpression {
     pub fn kind(&self) -> ValueKind {
         match self {
-            ResolvedShapeExpression::Simple(_, info) => ValueKind::Shape(ShapeInstance{id: info.id, generics: Vec::new()}),
+            ResolvedShapeExpression::Shape(_, info) => ValueKind::Shape(ShapeInstance{id: info.id, generics: Vec::new()}),
             ResolvedShapeExpression::Parameter(_, _) => ValueKind::Generic(0,Vec::new()),
             ResolvedShapeExpression::Applied{base: info, args, ..} => ValueKind::Shape(ShapeInstance{
                 id: info.id,
@@ -366,7 +381,8 @@ impl ResolvedShapeExpression {
             ResolvedShapeExpression::Set(_, expr) => ValueKind::Set(Box::new(expr.kind())),
             ResolvedShapeExpression::Dict(_, key, value) => ValueKind::Dict(Box::new(key.kind()), Box::new(value.kind())),
             ResolvedShapeExpression::Optional(_, expr) => ValueKind::Option(Box::new(expr.kind())),
-            _ => unreachable!()
+            ResolvedShapeExpression::Enum(_, info) => ValueKind::Enum(info.id),
+            //_ => unreachable!()
         }
     }
 }
@@ -382,6 +398,7 @@ pub struct ResolvedAttachment {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ResolvedExpression {
     Value(Span, Value),
+    EnumValue(Span, EnumId, EnumIndex),
     Array(Span, Vec<ResolvedExpression>, ValueKind),
     Set(Span, Vec<ResolvedExpression>, ValueKind),
     Dict(Span, Vec<(ResolvedExpression, ResolvedExpression)>, ValueKind, ValueKind),
@@ -511,6 +528,7 @@ impl ResolvedExpression {
                 _ => todo!()
             }
             ResolvedExpression::StaticSingleton(_,_) => ValueKind::Object(Vec::new()),
+            ResolvedExpression::EnumValue(_,id,_) => ValueKind::Enum(*id),
         }
     }
 
@@ -535,6 +553,7 @@ impl ResolvedExpression {
             ResolvedExpression::FunctionCall { span, .. } => span,
             ResolvedExpression::Function { span, .. } => span,
             ResolvedExpression::Reflection(span, _) => span,
+            ResolvedExpression::EnumValue(span, _, _) => span,
         }
     }
 }
@@ -616,6 +635,7 @@ pub struct Analyzer{
 
     pub azimuths: HashMap<AzimuthId, AzimuthInfo>,
     pub shapes: HashMap<ShapeId, ShapeInfo>,
+    pub enums: HashMap<EnumId, EnumInfo>,
     pub primitive_shapes: HashMap<Identifier, ShapeId>,
 
     pub next_scope_id: ScopeId,
@@ -641,6 +661,7 @@ impl Analyzer {
             namespace_static_info: HashMap::new(),
             azimuths: HashMap::new(),
             shapes: HashMap::new(),
+            enums: HashMap::new(),
             primitive_shapes:HashMap::new(),
         }
     }
@@ -695,6 +716,19 @@ impl Analyzer {
                 }
             }
         }
+    }
+
+    pub fn get_enum(&self, scope_id:ScopeId, identifier:&Identifier) -> Option<&EnumInfo> {
+        let using = self.get_using(scope_id);
+        let found = self.loader.get_enums(identifier, &using);
+        if found.len() <= 0 { 
+            println!("Couldn't find any enum called {:?} using {:?}", identifier, using);
+            return None 
+        }
+        if found.len() > 1 {
+           //return Err(CompileError::AmbiguousCall{span, found:found.map(|en|en.name).collect()})
+        }
+        self.enums.get(&found[0])
     }
 
     pub fn get_symbol(&self, id:ScopeId, identifier:Identifier) -> Option<&Symbol> {
@@ -833,7 +867,7 @@ impl Analyzer {
                     // Return only match
                     if matches.len() == 1 { 
                         return Ok(Some(matches[0].0)) 
-                    } else { return Err(CompileError::AmbiguousCall { span:span.clone(), found: matches.iter().map(|(_, f)| f.clone().clone()).collect() }) }
+                    } else { return Err(CompileError::AmbiguousCall { span:span.clone(), found: matches.iter().map(|(_, f)| format!("{}",f)).collect() }) }
                 }
             }
         }
@@ -949,9 +983,7 @@ impl Analyzer {
                     }
                 }
             }
-            ValueKind::String | ValueKind::Bool | ValueKind::Array(_) 
-            | ValueKind::Set(_)  | ValueKind::Dict(_,_) 
-            | ValueKind::Number(_) | ValueKind::Range(_) => {
+            primitive if self.primitive_shapes.contains_key(&Self::kind_to_shape_name(primitive)) => {
                 let name = match self.get_primitive_shape(target_kind, &span)? {
                     Some(info) => info.name.clone(),
                     None => return Err(CompileError::UndefinedSymbol { span, name: member })
@@ -998,7 +1030,7 @@ impl Analyzer {
     pub fn resolve_attachment(&mut self, span:&Span, attachment:RawAttachment, scope:ScopeId, target_known:Option<Vec<ValueKind>>) -> Result<ResolvedAttachment, CompileError> {
         let shape = self.resolve_shape_expression(attachment.shape, scope)?;
         let (qualifier, parents, inst) = match &shape {
-            ResolvedShapeExpression::Simple(_, info) => (info.name.clone(), info.parents.clone(), ShapeInstance { id:info.id, generics:[].to_vec() }),
+            ResolvedShapeExpression::Shape(_, info) => (info.name.clone(), info.parents.clone(), ShapeInstance { id:info.id, generics:[].to_vec() }),
             ResolvedShapeExpression::Parameter(_, _) => todo!(),
             ResolvedShapeExpression::Applied { base, args,.. } => 
                 (base.name.clone(), base.parents.clone(), ShapeInstance { 
@@ -1030,6 +1062,61 @@ impl Analyzer {
         }
 
         Ok(ResolvedAttachment{defaults:resolved_defaults, mappings:resolved_mappings, base:inst, known:shapes})
+    }
+
+    pub fn resolve_enum_value(&mut self, enum_value: &EnumValue, scope:ScopeId, backing:Option<ValueKind>, last_value:&mut f64) -> Result<ResolvedEnumValue, CompileError> {
+        let name = enum_value.name.clone();
+        match backing {
+            None => match &enum_value.value {
+                // No backing
+                None => Ok(ResolvedEnumValue{name, value:None}),
+                Some(_) => Err(CompileError::Error{span:enum_value.span.clone(), message:format!("Enum value without backing given definition: {:?}", enum_value.name)}),
+            }
+            Some(kind) => match &enum_value.value {
+                Some(expr) => {
+                    // Backing and definition
+                    let resolved = self.resolve_expression(expr.clone(), scope, Some(kind))?;
+
+                    // Update last_value
+                    match &resolved {
+                        ResolvedExpression::Value(_, Value::Number(number)) => {
+                            *last_value = number.to_f64().unwrap();
+                        }
+                        ResolvedExpression::Value(_, Value::Bool(bool)) => {
+                            *last_value = if *bool { 1.0 } else { 0.0 };
+                        }
+                        _ => {}
+                    }
+
+                    Ok(ResolvedEnumValue{name, value:Some(resolved)})
+                }
+                None => {
+                    // Backing and implicit value
+                    let value: Value = match kind {
+                        ValueKind::String => name.clone().into(),
+                        ValueKind::Bool => {
+                            if *last_value == 0.0 {
+                                *last_value = 1.0;
+                                true.into()
+                            } else {
+                                *last_value = 0.0;
+                                false.into()
+                            }
+                        }
+                        ValueKind::Number(kind) => {
+                            *last_value = *last_value + 1.0;
+                            let number = Number::Any(last_value.clone().into());
+                            number.to(kind).unwrap().into()    // Cast to number type
+                        }
+                        ValueKind::None => Value::None,
+                        other => return Err(CompileError::Error{span:enum_value.span.clone(), message:format!("Enum value must have definition: {:?}", enum_value.name)}),
+                    };
+
+                    let resolved = ResolvedExpression::Value(enum_value.span.clone(), value);
+                    Ok(ResolvedEnumValue{name, value:Some(resolved)})
+                }
+            }
+        }
     }
 
     pub fn resolve_expression(&mut self, expression:Expression, scope:ScopeId, known_type:Option<ValueKind>) -> Result<ResolvedExpression, CompileError> {
@@ -1135,6 +1222,7 @@ impl Analyzer {
 
                     // Other
                     Some(ValueKind::Option(_)) => ResolvedExpression::Value(span, Value::None),
+                    Some(ValueKind::Enum(id)) => ResolvedExpression::EnumValue(span, id, 0),
                     Some(ValueKind::Function(sig)) => {
                         let default_value = self.resolve_expression(Expression::Default(span.clone()), scope, Some(sig.output_type.clone()))?;
                         ResolvedExpression::Value(span.clone(), Value::Function(Box::new(Function{
@@ -1185,12 +1273,28 @@ impl Analyzer {
             Expression::Option(span, option) => todo!(),
 
             Expression::Shape(span, shape) => ResolvedExpression::Shape(span, self.resolve_shape_expression(shape, scope)?),
+
+            Expression::EnumValue(span, identifier) => {
+                match &known_type {
+                    Some(ValueKind::Enum(id)) => {
+                        let enum_shape = self.enums.get(&id).unwrap();
+                        match enum_shape.values.iter().enumerate().find(|(_,val)|val.name == identifier) {
+                            None => return Err(CompileError::Error{span, message:format!("Theres no such thing as a .{:?}", identifier)}),
+                            Some((index, _)) => {
+                                ResolvedExpression::Value(span, Value::Enum(*id, index as EnumIndex))
+                            }
+                        }
+                    }
+                    other => return Err(CompileError::Error{span, message:format!("WTF is this thing I wanted a {:?}", other)}),
+                }
+            }
             
             Expression::Variable(span, k) => {
                 match self.get_symbol(scope, k.clone()) {
                     //Some(Symbol::Object(info)) => ResolvedExpression::Variable(span, Symbol::Object(info.clone())),
                     Some(Symbol::Local(info)) => ResolvedExpression::Variable(span, Symbol::Local(info.clone())),
                     _ => {
+
                         println!("Not object or local, must be shape");
                         let found = self.loader.get_namespaces_matching(k.clone(), self.get_using(scope));
 
@@ -1317,6 +1421,13 @@ impl Analyzer {
                     (ResolvedExpression::Value(span, Value::None), right) => match operator {
                         Operator::DQuestion => right,
                         _ => ResolvedExpression::BinaryOp{span:span.clone(), left: Box::new(ResolvedExpression::Value(span, Value::None)), operator, right: Box::new(right)}
+                    },
+
+                    // Range by
+                    (ResolvedExpression::Value(span, Value::Range(from, to, _, inclusive, kind)), 
+                        ResolvedExpression::Value(rspan, Value::Number(right))) if right.kind().is_assignable_from(kind.into()) => match operator {
+                        Operator::Div => ResolvedExpression::Value(span, Value::Range(from, to, right, inclusive, kind)),
+                        _ => ResolvedExpression::BinaryOp{span:span.clone(), left: Box::new(ResolvedExpression::Value(span, Value::None)), operator, right: Box::new(ResolvedExpression::Value(rspan, Value::Number(right)))}
                     },
 
                     // Default
@@ -1451,8 +1562,8 @@ impl Analyzer {
                         Some(kind) => {
                             let kind = self.resolve_shape_expression(kind.clone(), scope)?;
                             match kind {
-                                ResolvedShapeExpression::Simple(span, shape) => {
-                                    let mut kind = ResolvedShapeExpression::Simple(span.clone(), shape.clone()).kind();
+                                ResolvedShapeExpression::Shape(span, shape) => {
+                                    let mut kind = ResolvedShapeExpression::Shape(span.clone(), shape.clone()).kind();
                                     for (prim_id, shape_id) in &self.primitive_shapes {
                                         if *shape_id == shape.id {
                                             println!("[{:?}] Primitive found: {:?} with inst {:?}", span, prim_id, shape);
@@ -1556,8 +1667,12 @@ impl Analyzer {
                     Some(found) => return Ok(found.clone()),
                     None => {}
                 }
+                match self.get_enum(scope, &k) {
+                    Some(found) => return Ok(ResolvedShapeExpression::Enum(span, found.clone())),
+                    None => {}
+                }
                 match self.get_shape(scope, k.clone()) {
-                    Some(info) => Ok(ResolvedShapeExpression::Simple(span, info.clone())),
+                    Some(info) => Ok(ResolvedShapeExpression::Shape(span, info.clone())),
                     _ => { 
                         match self.get_symbol(scope, k.clone()) {
                             Some(Symbol::Generic(info)) => Ok(ResolvedShapeExpression::Parameter(span, info.name.clone())),
@@ -1589,8 +1704,8 @@ impl Analyzer {
                     if signature.has_self && input_types.len() == 0 { 
                         // Self
                         match self.resolve_shape_expression(input, scope)? {
-                            ResolvedShapeExpression::Simple(span, shape) => {
-                                let mut kind = ResolvedShapeExpression::Simple(span, shape.clone()).kind();
+                            ResolvedShapeExpression::Shape(span, shape) => {
+                                let mut kind = ResolvedShapeExpression::Shape(span, shape.clone()).kind();
                                 for (prim_id, shape_id) in &self.primitive_shapes {
                                     if *shape_id == shape.id {
                                         kind = Self::shape_name_to_kind(prim_id, shape.generics.iter().map(|k|k.kind()).collect());
@@ -1656,6 +1771,9 @@ impl Analyzer {
                 Ok(ResolvedStatement::Block(Vec::new()))
             },
             Statement::DeclareAzimuth{ .. } => {
+                Ok(ResolvedStatement::Block(Vec::new()))
+            },
+            Statement::DeclareEnum{ .. } => {
                 Ok(ResolvedStatement::Block(Vec::new()))
             },
             Statement::DeclareShape { .. } => {
@@ -1735,7 +1853,7 @@ impl Analyzer {
                 // Add known types
                 match &object {
                     ResolvedExpression::Variable(_, Symbol::Local(info)) => {
-                        let kind = ResolvedShapeExpression::Simple(span.clone(), shape.clone());
+                        let kind = ResolvedShapeExpression::Shape(span.clone(), shape.clone());
                         self.add_local_known_type(&span, scope, info.id, kind)?;
 
                         for parent_id in &shape.parents {
@@ -1896,7 +2014,8 @@ impl Analyzer {
             Dict(_,_) => "Dict",
             Range(_) => "Range",
             Object(_) => "Object",
-            _ => todo!()
+            Enum(_) => "Enum",
+            _ => "",    // Not found
         }.to_string()
     }
 
@@ -1911,6 +2030,7 @@ impl Analyzer {
             "Dict" => Dict(Box::new(generics[0].clone()),Box::new(generics[1].clone())),
             "Range" => Range(NumKind::Any),
             "Object" => Object(Vec::new()),
+            "Enum" => Enum(0),
             _ => todo!()
         }
     }
@@ -1954,6 +2074,14 @@ impl Analyzer {
                 shape_id: namespace.id, 
                 default_value: None, 
                 value_type: ValueKind::None, 
+            });
+        }
+        for enum_def in &namespace.enums {
+            self.enums.insert(enum_def.id, EnumInfo {
+                id: enum_def.id,
+                name: enum_def.name.clone(),
+                backing: None,
+                values: Vec::new(),
             });
         }
         match namespace.kind {
@@ -2019,12 +2147,6 @@ impl Analyzer {
 
         // Static singleton
         if namespace.has_static() {
-            //let info = self.declare_object(
-            //    scope, 
-            //    format!("{}::Static", namespace.name), 
-            //    ResolvedShapeExpression::Primitive(span.clone(), ValueKind::Shape(OBJECT_INSTANCE)),
-            //    Some(namespace.name),
-            //).0;
             let azimuths = namespace.azimuths.iter().map(|az| az.id).collect();
             self.namespace_static_info.insert(namespace.id, (namespace.id, azimuths));
         }
@@ -2089,7 +2211,6 @@ impl Analyzer {
         Ok(())
     }
 
-
     fn resolve_namespace_kinds(&mut self, namespace: Namespace, scope: ScopeId) -> Result<(), CompileError> {
         let span = namespace.span.clone();
 
@@ -2098,9 +2219,23 @@ impl Analyzer {
         for azimuth in &namespace.azimuths {
             let resolved = self.resolve_shape_expression(azimuth.kind.clone(), scope)?;
             match self.azimuths.get_mut(&azimuth.id) {
-                None => return Err(CompileError::Error{span, message: format!("Dead azimuth: {}", namespace.id)}),
+                None => return Err(CompileError::Error{span, message: format!("Dead azimuth: {}", azimuth.id)}),
                 Some(info) => {
                     info.value_type = resolved.kind();
+                }
+            }
+        }
+        for enum_def in &namespace.enums {
+            // Backing
+            let backing = match &enum_def.backing {
+                None => None,
+                Some(expr) => Some(Box::new(self.resolve_shape_expression(expr.clone(), scope)?)),
+            };
+
+            match self.enums.get_mut(&enum_def.id) {
+                None => return Err(CompileError::Error{span, message: format!("Dead enum: {}", enum_def.id)}),
+                Some(info) => {
+                    info.backing = backing;
                 }
             }
         }
@@ -2129,6 +2264,24 @@ impl Analyzer {
                 None => return Err(CompileError::Error{span:namespace.span.clone(), message: format!("Dead azimuth: {}", namespace.id)}),
                 Some(info) => {
                     info.default_value = Some(Box::new(resolved));
+                }
+            }
+        }
+        for enum_def in &namespace.enums {
+            let backing = self.enums.get(&enum_def.id).unwrap().backing.clone();
+
+            // Values
+            let mut values = Vec::new();
+            let mut last_value: f64 = 0.0;
+            let known_type = backing.clone().map(|k|k.kind());
+            for value in &enum_def.raw_values {
+                values.push(self.resolve_enum_value(value, scope, known_type.clone(), &mut last_value)?);
+            }
+
+            match self.enums.get_mut(&enum_def.id) {
+                None => return Err(CompileError::Error{span:namespace.span.clone(), message: format!("Dead enum: {}", enum_def.id)}),
+                Some(info) => {
+                    info.values = values;
                 }
             }
         }

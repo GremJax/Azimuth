@@ -1,7 +1,7 @@
 use std::{env, io, string, time::{SystemTime, UNIX_EPOCH}};
 use rand::Rng;
 
-use crate::{NumKind, Number, Runtime, Value, ValueKind, analyzer::AzimuthInfo, executor::RuntimeError, lexer::Span, parser::{Expression, ParseError, ShapeExpression, Statement}};
+use crate::{NumKind, Number, Runtime, Value, ValueKind, analyzer::AzimuthInfo, executor::{self, RuntimeError}, lexer::Span, parser::{Expression, ParseError, ShapeExpression, Statement}};
 
 pub struct IntrinsicParameters<'a> {
     pub span: Span,
@@ -240,6 +240,27 @@ fn dict_keys(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
     }
 }
 
+fn enum_raw(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
+    let enum_value = &input.args[0];
+    match enum_value {
+        Value::Enum(id, index) => {
+            let enum_info = match input.runtime.get_enum(*id) {
+                None => return Err(RuntimeError::Error{span:input.span, message:format!("FUCKED CURRENTLY")}),
+                Some(i) => i,
+            };
+            let value = match enum_info.values.get(*index as usize) {
+                None => return Err(RuntimeError::Error{span:input.span, message:format!("FUCKED CURRENTLY 2")}),
+                Some(val) => &val.value,
+            };
+            match value {
+                None => return Err(RuntimeError::Error{span:input.span, message:format!("Enum called Raw without base type")}),
+                Some(val) => executor::evaluate(input.runtime, val.clone())
+            }
+        }
+        _ => unreachable!()
+    }
+}
+
 fn runtime_print_locals(input: IntrinsicParameters) -> Result<Value, RuntimeError> {
     println!("{:?}", input.runtime.locals);
     Ok(Value::None)
@@ -268,6 +289,7 @@ pub fn lookup(span: Span, name: String) -> Result<IntrinsicOp, ParseError> {
         "Dict::Set" => Ok(todo),
         "Dict::Remove" => Ok(todo),
         "Dict::Get" => Ok(dict_get),
+        "Enum::Raw" => Ok(enum_raw),
         "Sqrt" => Ok(math_sqrt),
         "Args" => Ok(io_args),
         "ReadLine" => Ok(io_readline),

@@ -939,7 +939,8 @@ impl Analyzer {
                         }
                         other => {
                             println!("ASSSSS its a {:?}", other);
-                            let shape = self.get_primitive_shape(other, &span)?.unwrap();
+                            let inst = self.get_primitive_shape(other, &span)?;
+                            let shape = self.shapes.get(&inst.id).unwrap();
                             shape.name.clone()
                         }
                     };
@@ -984,7 +985,8 @@ impl Analyzer {
                 }
             }
             primitive if self.primitive_shapes.contains_key(&Self::kind_to_shape_name(primitive)) => {
-                let name = match self.get_primitive_shape(target_kind, &span)? {
+                let inst = self.get_primitive_shape(target_kind, &span)?;
+                let name = match self.shapes.get(&inst.id) {
                     Some(info) => info.name.clone(),
                     None => return Err(CompileError::UndefinedSymbol { span, name: member })
                 };
@@ -2035,11 +2037,17 @@ impl Analyzer {
         }
     }
 
-    fn get_primitive_shape(&self, kind: &ValueKind, span:&Span) -> Result<Option<&ShapeInfo>, CompileError> {
+    fn get_primitive_shape(&self, kind: &ValueKind, span:&Span) -> Result<ShapeInstance, CompileError> {
         let name = Self::kind_to_shape_name(kind);
 
         match self.primitive_shapes.get(&name) {
-            Some(found) => Ok(self.shapes.get(found)),
+            Some(found) => {
+                let base = self.shapes.get(found).unwrap();
+                let generics = match &kind {
+                    _ => Vec::new(),
+                };
+                Ok(ShapeInstance{ id: base.id, generics })
+            }
             None => Err(CompileError::Error{span:span.clone(), message:format!("Primitive intrinsic not found for {}", name)})
         }
     }

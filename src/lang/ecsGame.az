@@ -93,3 +93,21 @@ let bob MyEnum = .State2
 print bob.Raw()
 bob = .State3
 print bob.Raw()
+
+enum CustomError : Error {
+    FileCouldntParse -> new Error(Message = "Sorry mate youre fucked")
+    SomethingFuckedUp -> new Error(Message = "Youre super fucked")
+}
+
+let jim CustomError = .SomethingFuckedUp
+print jim.Raw()
+
+shape Something<T> {
+    GenericInner T
+}
+
+let jacob = new Something<int> (
+    GenericInner = 5
+)
+print jacob
+print jacob.GenericInner.Negate()

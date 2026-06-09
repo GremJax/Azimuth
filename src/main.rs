@@ -14,6 +14,7 @@ pub mod executor;
 pub mod intrinsic;
 
 // Formerly SlotBox
+// RIP Laughing Enigma
 
 type EnumId = u32;
 type EnumIndex = u32;

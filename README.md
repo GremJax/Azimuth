@@ -1,8 +1,8 @@
 # Azimuth
 
-The azimuth coding language is different from object oriented programming, where objects conform to a single type with known variables.
+The azimuth coding language is different from regular object oriented programming, where objects conform to a single type with known variables.
 Instead, each object can conform to any number of classes, with its variables mapped from the other classes it conforms to.
-This prioritizes dynamic capabilities and graph-like data structures while still allowing for type safety and speed.
+This prioritizes dynamic capabilities and graph-like data structures while still allowing for type safety.
 
 ## Structure
 
@@ -76,11 +76,12 @@ Long chains of consecutive statements are valid:
         print "false";
     }
 
-The recommended design is one that prioritizes simplicity above all else, with expressions contained in the minimum amount of parenthesis and statements on new lines following their conditions:
+The recommended style is one that prioritizes simplicity above all else, with expressions contained in the minimum amount of parenthesis and braces, and statements on new lines following their conditions:
 
     if x == y
         print "true"
-    else print "false"
+    else 
+        print "false"
 
 Braces are required for multiple lines
 
@@ -175,7 +176,7 @@ Lymphnoid types are the same syntax, just with types instead of names
 
     |int|
     |(int, int) -> int|
-    |() -> string|[]
+    [|() -> string|]
 
 Lymphnoids are actually just function signatures in the compiler, so any function works
 
